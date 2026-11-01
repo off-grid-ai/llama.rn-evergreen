@@ -10,6 +10,24 @@ fi
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 OUTPUT_DIR="$ROOT_DIR/ios/rnllama.xcframework"
 BUILD_ROOT="$ROOT_DIR/.build-ios-xcframework"
+
+# ccache through Xcode's CC/CXX build settings: the Xcode generator ignores
+# CMAKE_<LANG>_COMPILER_LAUNCHER. Set RNLLAMA_CCACHE=0 to compile without it.
+CCACHE_ARGS=()
+if [[ "${RNLLAMA_CCACHE:-1}" != "0" ]] && command -v ccache &> /dev/null; then
+  CCACHE_WRAPPER_DIR="$(mktemp -d)"
+  for tool in clang clang++; do
+    printf '#!/bin/sh\nexec ccache "%s" "$@"\n' "$(xcrun -f "$tool")" > "$CCACHE_WRAPPER_DIR/$tool"
+    chmod +x "$CCACHE_WRAPPER_DIR/$tool"
+  done
+  CCACHE_ARGS=(
+    -DCMAKE_XCODE_ATTRIBUTE_CC="$CCACHE_WRAPPER_DIR/clang"
+    -DCMAKE_XCODE_ATTRIBUTE_CXX="$CCACHE_WRAPPER_DIR/clang++"
+    -DCMAKE_XCODE_ATTRIBUTE_LD="$(xcrun -f clang)"
+    -DCMAKE_XCODE_ATTRIBUTE_LDPLUSPLUS="$(xcrun -f clang++)"
+  )
+  echo "Using ccache for the iOS build"
+fi
 STAGING_DIR="$BUILD_ROOT/staging"
 
 cleanup() {
@@ -116,6 +134,7 @@ build_framework_slice() {
 
     cmake "$ROOT_DIR/ios" \
       -GXcode \
+      "${CCACHE_ARGS[@]}" \
       -DCMAKE_SYSTEM_NAME="$system_name" \
       -DCMAKE_OSX_ARCHITECTURES="$architectures" \
       -DCMAKE_OSX_SYSROOT="$sysroot" \

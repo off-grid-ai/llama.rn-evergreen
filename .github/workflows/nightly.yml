@@ -148,6 +148,13 @@ jobs:
     needs: sync
     if: needs.sync.outputs.has_changes == 'true'
     runs-on: ubuntu-latest
+    env:
+      CCACHE_DIR: ${{ github.workspace }}/.ccache
+      CCACHE_MAXSIZE: 2G
+      # The toolchain is reinstalled per run, so hash the compiler rather than stat it.
+      CCACHE_COMPILERCHECK: content
+      CCACHE_BASEDIR: ${{ github.workspace }}
+      CCACHE_SLOPPINESS: time_macros,include_file_mtime,include_file_ctime,modules,clang_index_store,system_headers
     steps:
       - name: Maximize build space
         run: sudo rm -rf /usr/share/dotnet /opt/ghc /opt/hostedtoolcache
@@ -167,11 +174,44 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Cache Hexagon SDK
+        uses: actions/cache@v4
+        continue-on-error: true
+        with:
+          path: ~/.hexagon-sdk
+          key: ${{ runner.os }}-hexagon-sdk-${{ hashFiles('scripts/bootstrap.sh') }}
+
+      # Restores the previous night's objects; most of llama.cpp is unchanged.
+      - name: Cache ccache
+        uses: actions/cache@v4
+        continue-on-error: true
+        with:
+          path: ${{ github.workspace }}/.ccache
+          key: ${{ runner.os }}-ccache-nightly-android-${{ github.run_id }}
+          restore-keys: |
+            ${{ runner.os }}-ccache-nightly-android-
+
+      - name: Setup ccache
+        uses: ./.github/actions/setup-ccache
+
+      - name: Cache Gradle
+        uses: actions/cache@v4
+        continue-on-error: true
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: ${{ runner.os }}-gradle-nightly-${{ github.run_id }}
+          restore-keys: |
+            ${{ runner.os }}-gradle-nightly-
+
       - name: Bootstrap
         run: npm run bootstrap
 
       - name: Build Android libraries
-        run: npm run build:android-libs
+        run: |
+          npm run build:android-libs
+          ccache --show-stats
 
       - name: Package Android JNI libraries
         run: tar -czf llama-rn-android-jni-libs.tar.gz android/src/main/jniLibs
@@ -189,6 +229,16 @@ jobs:
     needs: sync
     if: needs.sync.outputs.has_changes == 'true'
     runs-on: macos-26
+    env:
+      CCACHE_DIR: ${{ github.workspace }}/.ccache
+      CCACHE_MAXSIZE: 2G
+      # The toolchain is reinstalled per run, so hash the compiler rather than stat it.
+      CCACHE_COMPILERCHECK: content
+      CCACHE_BASEDIR: ${{ github.workspace }}
+      CCACHE_SLOPPINESS: time_macros,include_file_mtime,include_file_ctime,modules,clang_index_store,system_headers
+      # The C++ tests use the Makefile generator, which reads these.
+      CMAKE_C_COMPILER_LAUNCHER: ccache
+      CMAKE_CXX_COMPILER_LAUNCHER: ccache
     outputs:
       ios_result: ${{ steps.ios.outcome }}
       cpp_result: ${{ steps.cpp.outcome }}
@@ -208,6 +258,21 @@ jobs:
 
       - name: Install dependencies
         run: npm ci
+
+      # Restores the previous night's objects; most of llama.cpp is unchanged.
+      - name: Cache ccache
+        uses: actions/cache@v4
+        continue-on-error: true
+        with:
+          path: ${{ github.workspace }}/.ccache
+          key: ${{ runner.os }}-ccache-nightly-ios-${{ github.run_id }}
+          restore-keys: |
+            ${{ runner.os }}-ccache-nightly-ios-
+
+      - name: Setup ccache
+        run: |
+          command -v ccache > /dev/null || brew install ccache
+          ccache --zero-stats
 
       - name: Bootstrap
         run: npm run bootstrap
@@ -231,6 +296,10 @@ jobs:
         continue-on-error: true
         run: npm run typecheck && npm test -- --maxWorkers=2 && npm run build
 
+      - name: ccache stats
+        if: always()
+        run: ccache --show-stats
+
       - name: Package iOS xcframework
         if: steps.ios.outcome == 'success'
         run: COPYFILE_DISABLE=1 tar -czf llama-rn-ios-xcframework.tar.gz ios/rnllama.xcframework
@@ -250,6 +319,13 @@ jobs:
   engine-packs:
     needs: [sync, build-android]
     runs-on: ubuntu-latest
+    env:
+      CCACHE_DIR: ${{ github.workspace }}/.ccache
+      CCACHE_MAXSIZE: 2G
+      # The toolchain is reinstalled per run, so hash the compiler rather than stat it.
+      CCACHE_COMPILERCHECK: content
+      CCACHE_BASEDIR: ${{ github.workspace }}
+      CCACHE_SLOPPINESS: time_macros,include_file_mtime,include_file_ctime,modules,clang_index_store,system_headers
     steps:
       - name: Maximize build space
         run: sudo rm -rf /usr/share/dotnet /opt/ghc /opt/hostedtoolcache/CodeQL
@@ -273,6 +349,30 @@ jobs:
 
       - name: Install NDK
         run: yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "ndk;$ENGINE_PACK_NDK" >/dev/null
+
+      # Restores the previous night's objects; most of llama.cpp is unchanged.
+      - name: Cache ccache
+        uses: actions/cache@v4
+        continue-on-error: true
+        with:
+          path: ${{ github.workspace }}/.ccache
+          key: ${{ runner.os }}-ccache-nightly-engine-packs-${{ github.run_id }}
+          restore-keys: |
+            ${{ runner.os }}-ccache-nightly-engine-packs-
+
+      - name: Setup ccache
+        uses: ./.github/actions/setup-ccache
+
+      - name: Cache Gradle
+        uses: actions/cache@v4
+        continue-on-error: true
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: ${{ runner.os }}-gradle-nightly-${{ github.run_id }}
+          restore-keys: |
+            ${{ runner.os }}-gradle-nightly-
 
       - name: Download Android build
         uses: actions/download-artifact@v4
@@ -301,6 +401,7 @@ jobs:
           echo "ndkVersion=$ENGINE_PACK_NDK" >> gradle.properties
           sed -i "s/ndkVersion = \".*\"/ndkVersion = \"$ENGINE_PACK_NDK\"/" build.gradle
           ./gradlew assembleRelease -PreactNativeArchitectures=arm64-v8a,x86_64 --no-daemon
+          ccache --show-stats
 
       - name: Make engine packs
         run: |
