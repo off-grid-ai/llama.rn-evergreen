@@ -1,0 +1,61 @@
+name: Publish to npm
+
+# Publish an existing GitHub Release's tarball to npm without rebuilding it,
+# under this branch's package name (re-labels a tarball packed under an older
+# name, and adds it to the release).
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Released version, e.g. 0.13.0-b12032
+        required: true
+        type: string
+
+permissions:
+  contents: write
+  id-token: write # npm provenance
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: '20'
+          registry-url: https://registry.npmjs.org
+
+      - name: Re-label the released tarball
+        id: tarball
+        run: |
+          NAME=$(node -p "require('./package.json').name")
+          gh release download "v$VERSION" -p "*-llama.rn-$VERSION.tgz" -D "$RUNNER_TEMP/release"
+          mkdir "$RUNNER_TEMP/pkg"
+          tar -xzf "$RUNNER_TEMP"/release/*.tgz -C "$RUNNER_TEMP/pkg"
+          cd "$RUNNER_TEMP/pkg/package"
+          node -e "const fs=require('fs');const p=JSON.parse(fs.readFileSync('package.json'));p.name=process.argv[1];fs.writeFileSync('package.json',JSON.stringify(p,null,2)+'\n')" "$NAME"
+          # The tarball is already built; packing must not rebuild it.
+          FILE=$(npm pack --ignore-scripts --pack-destination "$RUNNER_TEMP" | tail -1)
+          echo "file=$RUNNER_TEMP/$FILE" >> "$GITHUB_OUTPUT"
+          echo "Packed $FILE as $NAME@$VERSION"
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ inputs.version }}
+
+      - name: Publish
+        run: npm publish "$FILE" --access public --provenance
+        env:
+          FILE: ${{ steps.tarball.outputs.file }}
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: Put the tarball on the release
+        # Older tarballs stay: apps may already depend on their URLs.
+        run: gh release upload "v$VERSION" "$FILE" --clobber
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ inputs.version }}
+          FILE: ${{ steps.tarball.outputs.file }}
