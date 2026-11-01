@@ -266,13 +266,20 @@ apply_patches() {
   local dir="$PATCHES_DIR/$name"
   [ -d "$dir" ] || return 0
 
-  local patch_file
+  local patch_file failed=0
   for patch_file in "$dir"/*.patch; do
     [ -e "$patch_file" ] || continue
     echo "  patch: $(basename "$patch_file")"
-    patch -p1 -d "$dest" < "$patch_file"
+    # -N: never reverse-apply a patch upstream already merged (BSD patch
+    # otherwise assumes -R and silently undoes it).
+    if ! patch -p1 -N -d "$dest" < "$patch_file"; then
+      echo "  FAILED: $(basename "$patch_file"): delete it if upstream merged it, else refresh it with scripts/update-patch.sh" >&2
+      failed=1
+    fi
   done
+  # Clean up even on failure so a partial sync never commits backup files.
   find "$dest" \( -name '*.orig' -o -name '*.rej' \) -delete
+  return "$failed"
 }
 
 # Rewrite <PREFIX>_COMMIT in VERSIONS so the pin is reproducible even if the
