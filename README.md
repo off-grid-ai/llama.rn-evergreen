@@ -1,44 +1,113 @@
-# llama.rn-evergreen (`@ogai/llama.rn`)
+# llama.rn-evergreen
 
 [![Nightly](https://github.com/off-grid-ai/llama.rn-evergreen/actions/workflows/nightly.yml/badge.svg)](https://github.com/off-grid-ai/llama.rn-evergreen/actions/workflows/nightly.yml)
 [![llama.cpp](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fraw.githubusercontent.com%2Foff-grid-ai%2Fllama.rn-evergreen%2Fmain%2Fpackage.json&query=%24.offgrid.llamaCpp&label=llama.cpp)](https://github.com/ggml-org/llama.cpp/releases)
-[![Release](https://img.shields.io/github/v/release/off-grid-ai/llama.rn-evergreen?include_prereleases)](https://github.com/off-grid-ai/llama.rn-evergreen/releases)
+[![npm](https://img.shields.io/npm/v/@ogai/llama.rn.svg)](https://www.npmjs.com/package/@ogai/llama.rn)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-[llama.rn](https://github.com/mybigday/llama.rn) on the newest [llama.cpp](https://github.com/ggml-org/llama.cpp), rebuilt every night.
-Off Grid AI maintains it for its mobile app. The API is the same as llama.rn.
+Run the newest open models on iPhone and Android, the day llama.cpp supports them.
 
-## How it differs from llama.rn
+`@ogai/llama.rn` is a React Native binding for [llama.cpp](https://github.com/ggml-org/llama.cpp) that never falls behind. Every night it moves to the newest llama.cpp release, builds and tests it, and publishes it. Off Grid AI builds its mobile app on it.
 
-- **Newest llama.cpp.** A nightly workflow syncs to the newest llama.cpp `bNNNNN` release, then builds, tests and publishes. The badge above shows the current tag. A new model architecture (for example LFM3) works the day llama.cpp ships it.
-- **Prebuilt binaries.** Each release hosts the Android `.so` variants and the iOS `rnllama.xcframework`. `postinstall` downloads them and checks their SHA-256. You do not build native code.
-- **Signed Android engine packs.** Each release also has a pack per Android ABI. Your app can download a newer engine without an app update. See [Android engine packs](#android-engine-packs). iOS cannot load downloaded code, so iOS gets new engines through app releases.
-- **Every step is tested.** Vendor sync, Android build, iOS build, C++ tests, Jest, the TypeScript build and the engine-pack build all run each night. A broken step opens a PR that names it. Fixes that are not Off Grid specific go upstream to llama.rn.
+## Why it exists
+
+New model architectures land in llama.cpp almost daily. A React Native app only gets them when its binding ships a release. This package closes that gap:
+
+- **Newest llama.cpp, every night.** The nightly syncs to the newest `bNNNNN` release. When llama.cpp adds an architecture (LFM3, for example), the package supports it within a day.
+- **Nothing to compile.** Each release ships prebuilt Android libraries and the iOS `rnllama.xcframework`. Install downloads them and verifies their SHA-256.
+- **Android engine updates without an app update.** Each release also ships signed engine packs. Your app can download a newer engine, verify it and load it, and fall back to the bundled engine if it fails. iOS cannot load downloaded code, so iOS apps get new engines through app releases.
+- **Tested every night.** Each night runs the C++ tests, Jest and the TypeScript build, and builds Android and iOS. A broken step opens a pull request that names it.
 
 ## Install
 
-Each GitHub Release carries the npm tarball. Install it under the name `llama.rn` so your imports stay unchanged:
-
-```json
-{
-  "dependencies": {
-    "llama.rn": "https://github.com/off-grid-ai/llama.rn-evergreen/releases/download/v0.13.0-b12032/ogai-llama.rn-0.13.0-b12032.tgz"
-  }
-}
+```sh
+npm install llama.rn@npm:@ogai/llama.rn
 ```
 
-Publishing to npm as `@ogai/llama.rn` is coming.
+Use the same alias with yarn, pnpm or bun (`yarn add llama.rn@npm:@ogai/llama.rn`). The package installs under the name `llama.rn`, so your imports are `from 'llama.rn'`.
 
-Versions are `<llama.rn version>-<llama.cpp tag>`, for example `0.13.0-b12032`. A `.N` suffix marks a rebuild on the same llama.cpp tag.
+**Coming from llama.rn?** Replace that one dependency with the line above. Your code does not change.
+
+React Native's New Architecture is required.
+
+### Native binaries
+
+Install runs `install/download-native-artifacts.js`. It:
+
+- downloads the prebuilt binaries for the installed version from Cloudflare R2 (`https://mobile-runtime.getoffgridai.co/native/`), and from the GitHub Release if R2 fails;
+- verifies each archive's SHA-256 before it extracts it;
+- keeps verified archives in `~/.cache/ogai-llama.rn/<version>/` (set `LLAMA_RN_ARTIFACT_CACHE` to change it), so a reinstall downloads nothing;
+- downloads Android binaries everywhere and iOS binaries on macOS only (set `LLAMA_RN_PLATFORMS=android,ios` to change it).
+
+With Bun, add the package to `trustedDependencies` so install scripts run, or run the downloader yourself before `npx pod-install` or your Android build:
+
+```sh
+node ./node_modules/llama.rn/install/download-native-artifacts.js
+```
+
+### iOS
+
+Run `npx pod-install`. To build from source instead of using the prebuilt framework, set `RNLLAMA_BUILD_FROM_SOURCE=1` in your Podfile.
+
+### Android
+
+If ProGuard is on, add this to `android/app/proguard-rules.pro`:
+
+```proguard
+-keep class com.rnllama.** { *; }
+```
+
+To build from source instead of using the prebuilt libraries, set `rnllamaBuildFromSource=true` in `android/gradle.properties`.
+
+GPU (OpenCL) and NPU (Hexagon) setup is in the [API reference](docs/API.md#features).
+
+### Expo
+
+Add the config plugin under the name `llama.rn`:
+
+```js
+plugins: [
+  ['llama.rn', { enableEntitlements: true, entitlementsProfile: 'production', forceCxx20: true, enableOpenCL: true }],
+]
+```
+
+The values shown are the defaults. You also need `expo-build-properties`.
+
+## Quick start
+
+```js
+import { initLlama } from 'llama.rn'
+
+const context = await initLlama({
+  model: 'file:///path/to/model.gguf',
+  n_ctx: 4096,
+  n_gpu_layers: 99, // offload to Metal on iOS
+})
+
+const result = await context.completion(
+  { messages: [{ role: 'user', content: 'Hello!' }], n_predict: 256 },
+  (data) => console.log(data.token), // streamed tokens
+)
+console.log(result.text)
+
+await context.release()
+```
+
+Vision and audio models, tool calling, grammars, embeddings, rerank, parallel decoding, speculative decoding and text-to-speech are in the [API reference](docs/API.md).
+
+## Versions
+
+Versions are `<llama.rn base>-<llama.cpp tag>`, for example `0.13.0-b12032` is built on llama.cpp `b12032`. A `.N` suffix is a rebuild on the same llama.cpp tag. `latest` on npm is always the newest nightly that passed every test.
 
 ## Android engine packs
 
-A pack is the full `librnllama*.so` set for one Android ABI: the core library and the JNI wrapper of every CPU variant, plus the Hexagon HTP libraries under `htp/` (arm64-v8a only). The JNI wrapper is compiled against llama.cpp headers and React Native, so a pack only fits an app built on the same React Native version and the same Java/JS bridge.
+An engine pack is the full set of `librnllama*.so` files for one Android ABI. It has every CPU variant, and on arm64-v8a it also has the Hexagon libraries under `htp/`. A pack fits only an app built on the same React Native version and the same package bridge, so the manifest records both.
 
-**Where.** Each GitHub Release carries `engine-pack-<abi>.zip`, `manifest.json`, `manifest.json.sig` and `engine-signing-public-key.pem`. The same files are on Cloudflare R2. The pack `url`s in the manifest point there:
+**Where to get them.**
 
-- `https://mobile-runtime.getoffgridai.co/android/manifest.json` and `manifest.json.sig`: the newest release
-- `https://mobile-runtime.getoffgridai.co/android/<version>/`: one release's packs and manifest, never changed
+- `https://mobile-runtime.getoffgridai.co/android/manifest.json` and `manifest.json.sig` describe the newest release.
+- `https://mobile-runtime.getoffgridai.co/android/<version>/` holds one release's packs and manifest. These files never change.
+- Each GitHub Release carries the same files and `engine-signing-public-key.pem`.
 
 **manifest.json** (schema 1):
 
@@ -55,7 +124,7 @@ A pack is the full `librnllama*.so` set for one Android ABI: the core library an
   "packs": [
     {
       "abi": "arm64-v8a",
-      "url": "https://…/engine-pack-arm64-v8a.zip",
+      "url": "https://mobile-runtime.getoffgridai.co/android/0.13.0-b12032/engine-pack-arm64-v8a.zip",
       "sha256": "<sha256 hex of the zip>",
       "size": 12345678,
       "files": [
@@ -68,921 +137,40 @@ A pack is the full `librnllama*.so` set for one Android ABI: the core library an
 }
 ```
 
-- `manifest.json.sig` is the base64 raw Ed25519 signature over the exact bytes of `manifest.json`.
-- Public key (Ed25519, raw 32 bytes, base64): `c4nGAstb9RSHmeFnP8n+4kEoR85a2V01N34jQKzl/iQ=`. The PEM is `install/engine-signing-public-key.pem` in the package.
-- `bridge` is a hash of the contract the APK bakes in: the Java sources and the JS sources (`src/`, without tests and `src/version.ts`). The package's own value is in its `package.json` as `offgrid.engineBridge`.
-- `reactNative` is the exact React Native version the JNI wrappers were built against.
+- `manifest.json.sig` is a base64 Ed25519 signature over the exact bytes of `manifest.json`.
+- The public key (Ed25519, raw 32 bytes, base64) is `c4nGAstb9RSHmeFnP8n+4kEoR85a2V01N34jQKzl/iQ=`. The package also ships it as `install/engine-signing-public-key.pem`.
+- `bridge` is a hash of the Java and JS sources an APK bakes in. Your installed package has its own value in `package.json` as `offgrid.engineBridge`.
+- `reactNative` is the exact React Native version the packs were built against.
 
-**Accept a pack only if** the signature verifies with the pinned key, `package` matches, `bridge` equals your installed package's `offgrid.engineBridge`, `reactNative` equals your app's version exactly, and `version` is newer than what runs. Then check the zip's SHA-256. Extract to a staging directory and reject any extra file, missing file, path with `..`, or file whose SHA-256 differs from `files`. Move the directory atomically into app-private storage.
+**Accept a pack only when** all of these hold:
 
-**Loader hook** (Java, `com.rnllama.RNLlama`):
+1. The signature verifies with the pinned key.
+2. `package`, `bridge` and `reactNative` match your app exactly.
+3. `version` is newer than the engine your app runs.
+4. The zip's SHA-256 matches.
+5. After extraction to a staging directory, there are no extra files, no missing files and no `..` paths, and every file's SHA-256 matches `files`.
+
+Then move the directory into app-private storage in one atomic step.
+
+**Load it** (Java, `com.rnllama.RNLlama`):
 
 ```java
-// Application.onCreate, before React Native starts. null = bundled libraries.
+// In Application.onCreate, before React Native starts. Pass null for the bundled engine.
 RNLlama.setEnginePackDir(new File(getFilesDir(), "llama-engines/0.13.0-b12032/arm64-v8a"));
 
 // After llama.rn initialises:
-RNLlama.getNativeLibrarySource(); // "pack", "bundled", or null if not loaded
+RNLlama.getNativeLibrarySource(); // "pack", "bundled", or null if not loaded yet
 RNLlama.getEnginePackError();     // null, or why the pack was not used
 ```
 
-The hook picks the CPU variant as usual. It loads the variant's core and then its JNI wrapper from the pack with `System.load`, so the wrapper links to the pack's core. If the pack has no `librnllama.so`, the bundled libraries load. If a pack library fails to load, the hook records the error and loads the bundled libraries for this launch. Your app should then drop that pack. If `htp/` holds the HTP libraries, the Hexagon backend uses them.
-
-## Credits
-
-This is a fork of [mybigday/llama.rn](https://github.com/mybigday/llama.rn) by Jhen-Jie Hong and contributors, built on [ggml-org/llama.cpp](https://github.com/ggml-org/llama.cpp). Both are MIT licensed. LICENSE keeps llama.rn's MIT notice, and [NOTICE](NOTICE) lists the vendored licences.
-
-The upstream llama.rn documentation follows. Install `@ogai/llama.rn` where it says `llama.rn`.
-
----
-
-React Native binding of [llama.cpp](https://github.com/ggerganov/llama.cpp) - LLM inference in C/C++
-
-**Key Features:**
-
-- **GPU/NPU Acceleration**: Metal (iOS), Hexagon NPU (Android, Experimental) for on-device inference
-- **Multimodal Support**: Support vision/audio understanding models through mmproj projector integration
-- **Text-to-Speech (Experimental)**: On-device neural TTS via [codec.cpp](https://github.com/mybigday/codec.cpp) — OuteTTS, Soprano, NeuTTS, CSM, Qwen3-TTS, MOSS, Chatterbox, BlueMagpie — with reference-audio voice cloning
-- **Parallel Decoding**: Slot-based concurrent request processing with automatic queue management
-- **Tool Calling**: Universal function calling support via Jinja templates
-- **Grammar Sampling**: GBNF and JSON schema support for structured, constrained output generation
-
-> [!IMPORTANT]
-> **Starting with v0.10**, `llama.rn` requires React Native's **New Architecture**.
->
-> For **Old Architecture** support or documentation for v0.9.x, please refer to the [`v0.9` branch](https://github.com/mybigday/llama.rn/tree/v0.9).
-
-## Installation
-
-```sh
-npm install llama.rn
-```
-
-`llama.rn` downloads the pre-built `ios/rnllama.xcframework` and `android/src/main/jniLibs` from the matching GitHub release during `postinstall`. Existing downloads are reused, and each archive is verified with SHA-256 before extraction.
-
-#### Bun
-
-Bun does not run dependency lifecycle scripts unless the package is trusted. If you install `llama.rn` with Bun and want the native downloads to run automatically, add it to `trustedDependencies` and re-run `bun install`:
-
-```json
-{
-  "trustedDependencies": ["llama.rn"]
-}
-```
-
-If you prefer not to trust dependency lifecycle scripts, run the downloader manually before `npx pod-install` or your Android build:
-
-```sh
-node ./node_modules/llama.rn/install/download-native-artifacts.js
-```
-
-#### iOS
-
-Please re-run `npx pod-install` again.
-
-By default, `llama.rn` will use pre-built `rnllama.xcframework` for iOS. If you want to build from source, please set `RNLLAMA_BUILD_FROM_SOURCE` to `1` in your Podfile.
-
-#### Android
-
-Add proguard rule if it's enabled in project (android/app/proguard-rules.pro):
-
-```proguard
-# llama.rn
--keep class com.rnllama.** { *; }
-```
-
-By default, `llama.rn` will use pre-built libraries for Android. If you want to build from source, please set `rnllamaBuildFromSource` to `true` in `android/gradle.properties`.
-
-##### OpenCL (GPU acceleration)
-
-- Confirm the target device exposes an OpenCL-capable GPU (Qualcomm Adreno 700+ devices are currently supported & tested).
-- Add `<uses-native-library android:name="libOpenCL.so" android:required="false" />` to your app manifest so the loader can be loaded at runtime.
-- Configure `n_gpu_layers` (> 0) when calling `initLlama` to offload layers to the GPU. The native result exposes `gpu`, `reasonNoGPU`, `devices`, so you can confirm runtime behaviour.
-
-##### Hexagon (NPU acceleration) (Experimental)
-
-- Confirm the target device has HTP (Hexagon Tensor Processor), Qualcomm SM8450+ (8 gen 1 or newer) devices are currently supported & tested).
-- Add `<uses-native-library android:name="libcdsprpc.so" android:required="false" />` to your app manifest so the loader can be loaded at runtime.
-- Add param `devices: ['HTP0']` (or `HTP*` for all HTP sessions) to use HTP devices.
-- Configure `n_gpu_layers` (> 0) when calling `initLlama` to offload layers to the GPU. The native result exposes `gpu`, `reasonNoGPU`, `devices`, so you can confirm runtime behaviour.
-
-#### Expo
-
-For use with the Expo framework and CNG builds, you will need `expo-build-properties` to utilize iOS and OpenCL features. Simply add the following to your app.json/app.config.js file:
-
-```js
-module.exports = {
-  expo: {
-    // ...
-    plugins: [
-      // ...
-      [
-        'llama.rn',
-        // optional fields, below are the default values
-        {
-          enableEntitlements: true,
-          entitlementsProfile: 'production',
-          forceCxx20: true,
-          enableOpenCL: true,
-        },
-      ],
-    ],
-  },
-}
-```
-
-## Obtain the model
-
-You can search HuggingFace for available models (Keyword: [`GGUF`](https://huggingface.co/search/full-text?q=GGUF&type=model)).
-
-For get a GGUF model or quantize manually, see [`quantize`](https://github.com/ggml-org/llama.cpp/blob/master/tools/quantize/README.md) documentation in llama.cpp.
-
-## Usage
-
-> **💡** You can find complete examples in the [example](example) project.
-
-Load model info only:
-
-```js
-import { loadLlamaModelInfo } from 'llama.rn'
-
-const modelPath = 'file://<path to gguf model>'
-console.log('Model Info:', await loadLlamaModelInfo(modelPath))
-```
-
-Initialize a Llama context & do completion:
-
-```js
-import { initLlama } from 'llama.rn'
-
-// Initial a Llama context with the model (may take a while)
-const context = await initLlama({
-  model: modelPath,
-  use_mlock: true,
-  n_ctx: 2048,
-  n_gpu_layers: 99, // number of layers to store in GPU memory (Metal/OpenCL)
-  // embedding: true, // use embedding
-})
-
-const stopWords = ['</s>', '<|end|>', '<|eot_id|>', '<|end_of_text|>', '<|im_end|>', '<|EOT|>', '<|END_OF_TURN_TOKEN|>', '<|end_of_turn|>', '<|endoftext|>']
-
-// Do chat completion
-const msgResult = await context.completion(
-  {
-    messages: [
-      {
-        role: 'system',
-        content: 'This is a conversation between user and assistant, a friendly chatbot.',
-      },
-      {
-        role: 'user',
-        content: 'Hello!',
-      },
-    ],
-    n_predict: 100,
-    stop: stopWords,
-    // ...other params
-  },
-  (data) => {
-    // This is a partial completion callback
-    const { token } = data
-  },
-)
-console.log('Result:', msgResult.text)
-console.log('Timings:', msgResult.timings)
-
-// Or do text completion
-const textResult = await context.completion(
-  {
-    prompt: 'This is a conversation between user and llama, a friendly chatbot. respond in simple markdown.\n\nUser: Hello!\nLlama:',
-    n_predict: 100,
-    stop: [...stopWords, 'Llama:', 'User:'],
-    // ...other params
-  },
-  (data) => {
-    // This is a partial completion callback
-    const { token } = data
-  },
-)
-console.log('Result:', textResult.text)
-console.log('Timings:', textResult.timings)
-```
-
-The binding's design inspired by [server.cpp](https://github.com/ggerganov/llama.cpp/tree/master/examples/server) example in llama.cpp:
-
-- `/completion` and `/chat/completions`: `context.completion(params, partialCompletionCallback)`
-- `/tokenize`: `context.tokenize(content)`
-- `/detokenize`: `context.detokenize(tokens)`
-- `/embedding`: `context.embedding(content)`
-- `/rerank`: `context.rerank(query, documents, params)`
-- ... Other methods
-
-Please visit the [Documentation](docs/API) for more details.
-
-You can also visit the [example](example) to see how to use it.
-
-## MTP Speculative Decoding
-
-MTP speculative decoding can be enabled for GGUF models that contain MTP/NextN layers:
-
-```js
-const context = await initLlama({
-  model: modelPath,
-  n_ctx: 4096,
-  n_batch: 1024,
-  n_ubatch: 512,
-  n_gpu_layers: 99,
-  flash_attn_type: 'auto',
-  cache_type_k: 'q8_0',
-  cache_type_v: 'q8_0',
-  speculative: {
-    type: 'draft-mtp',
-    n_max: 3,
-  },
-})
-
-const result = await context.completion({
-  messages: [
-    {
-      role: 'user',
-      content:
-        'Write a concise TypeScript function that groups an array of objects by a key.',
-    },
-  ],
-  chat_template_kwargs: {
-    preserve_thinking: true,
-  },
-  n_predict: 128,
-  temperature: 0.6,
-  top_k: 20,
-  top_p: 0.95,
-  speculative: {
-    type: 'draft-mtp',
-    n_max: 3,
-  },
-})
-
-console.log(result.text)
-console.log(result.draft_tokens, result.draft_tokens_accepted)
-```
-
-Use `speculative: false` on a completion call to disable MTP for that request. For recurrent or hybrid models, enable MTP at `initLlama` time with a positive `spec_draft_n_max` or `speculative.draft.n_max` so llama.cpp can allocate rollback state. Current MTP support is text-only, including queued parallel completions.
-
-### Classic draft model (draft-simple)
-
-Besides embedded MTP layers, a classic pair of a small draft model and a large target model is
-supported by setting the speculative type to `draft-simple` (both models must share the same
-vocabulary):
-
-```js
-const context = await initLlama({
-  model: modelPath,
-  n_ctx: 4096,
-  n_batch: 1024,
-  n_ubatch: 512,
-  speculative: {
-    type: 'draft-simple',
-    n_max: 3, // also accepted as spec_draft_n_max
-    draft: {
-      model: draftModelPath,
-      n_gpu_layers: 0,
-    },
-  },
-})
-```
-
-The draft model must use the same vocabulary as the target; a mismatch throws
-`draft model vocab type must match target model to use speculation` instead of running without
-speculation. Like MTP, draft-simple is text-only for now, including queued parallel completions,
-and can be disabled per request with `speculative: false`. Acceptance statistics are reported as
-`draft_tokens` / `draft_tokens_accepted` on the completion result. Recurrent or hybrid models
-(as target or draft) are not supported with draft-simple yet.
-
-## Multimodal (Vision & Audio)
-
-`llama.rn` supports multimodal capabilities including vision (images) and audio processing. This allows you to interact with models that can understand both text and media content.
-
-### Supported Media Formats
-
-**Images (Vision):**
-- JPEG, PNG, BMP, GIF, TGA, HDR, PIC, PNM
-- Base64 encoded images (data URLs)
-- Local file paths
-- \* Not supported HTTP URLs yet
-
-**Audio:**
-- WAV, MP3 formats
-- Base64 encoded audio (data URLs)
-- Local file paths
-- \* Not supported HTTP URLs yet
-
-### Setup
-
-First, you need a multimodal model and its corresponding multimodal projector (mmproj) file, see [how to obtain mmproj](https://github.com/ggml-org/llama.cpp/tree/master/tools/mtmd#how-to-obtain-mmproj) for more details.
-
-### Initialize Multimodal Support
-
-```js
-import { initLlama } from 'llama.rn'
-
-// First initialize the model context
-const context = await initLlama({
-  model: 'path/to/your/multimodal-model.gguf',
-  n_ctx: 4096,
-  n_gpu_layers: 99, // Recommended for multimodal models
-  // Important: Disable context shifting for multimodal
-  ctx_shift: false,
-})
-
-// Initialize multimodal support with mmproj file
-const success = await context.initMultimodal({
-  path: 'path/to/your/mmproj-model.gguf',
-  use_gpu: true, // Recommended for better performance
-})
-
-// Check if multimodal is enabled
-console.log('Multimodal enabled:', await context.isMultimodalEnabled())
-
-if (success) {
-  console.log('Multimodal support initialized!')
-
-  // Check what modalities are supported
-  const support = await context.getMultimodalSupport()
-  console.log('Vision support:', support.vision)
-  console.log('Audio support:', support.audio)
-} else {
-  console.log('Failed to initialize multimodal support')
-}
-
-// Release multimodal context
-await context.releaseMultimodal()
-```
-
-### Usage Examples
-
-#### Vision (Image Processing)
-
-```js
-const result = await context.completion({
-  messages: [
-    {
-      role: 'user',
-      content: [
-        {
-          type: 'text',
-          text: 'What do you see in this image?',
-        },
-        {
-          type: 'image_url',
-          image_url: {
-            url: 'file:///path/to/image.jpg',
-            // or base64: 'data:image/jpeg;base64,/9j/4AAQSkZJRgABAQEAYABgAAD...'
-          },
-        },
-      ],
-    },
-  ],
-  n_predict: 100,
-  temperature: 0.1,
-})
-
-console.log('AI Response:', result.text)
-```
-
-#### Audio Processing
-
-```js
-// Method 1: Using structured message content (Recommended)
-const result = await context.completion({
-  messages: [
-    {
-      role: 'user',
-      content: [
-        {
-          type: 'text',
-          text: 'Transcribe or describe this audio:',
-        },
-        {
-          type: 'input_audio',
-          input_audio: {
-            data: 'data:audio/wav;base64,UklGRiQAAABXQVZFZm10...',
-            // or url: 'file:///path/to/audio.wav',
-            format: 'wav', // or 'mp3'
-          },
-        },
-      ],
-    },
-  ],
-  n_predict: 200,
-})
-
-console.log('Transcription:', result.text)
-```
-
-### Tokenization with Media
-
-```js
-// Tokenize text with media
-const tokenizeResult = await context.tokenize(
-  'Describe this image: <__media__>',
-  {
-    media_paths: ['file:///path/to/image.jpg']
-  }
-)
-
-console.log('Tokens:', tokenizeResult.tokens)
-console.log('Has media:', tokenizeResult.has_media)
-console.log('Media positions:', tokenizeResult.chunk_pos_media)
-```
-
-### Notes
-
-- **Context Shifting**: Multimodal models require `ctx_shift: false` to maintain media token positioning
-- **Memory**: Multimodal models require more memory; use adequate `n_ctx` and consider GPU offloading
-- **Media Markers**: The system automatically handles `<__media__>` markers in prompts. When using structured message content, media items are automatically replaced with this marker
-- **Model Compatibility**: Ensure your model supports the media type you're trying to process
-
-## Tool Calling
-
-`llama.rn` has universal tool call support by using [minja](https://github.com/google/minja) (as Jinja template parser) and [chat.cpp](https://github.com/ggerganov/llama.cpp/blob/master/common/chat.cpp) in llama.cpp.
-
-Example:
-
-```js
-import { initLlama } from 'llama.rn'
-
-const context = await initLlama({
-  // ...params
-})
-
-const { text, tool_calls } = await context.completion({
-  // ...params
-  tool_choice: 'auto',
-  tools: [
-    {
-      type: 'function',
-      function: {
-        name: 'ipython',
-        description:
-          'Runs code in an ipython interpreter and returns the result of the execution after 60 seconds.',
-        parameters: {
-          type: 'object',
-          properties: {
-            code: {
-              type: 'string',
-              description: 'The code to run in the ipython interpreter.',
-            },
-          },
-          required: ['code'],
-        },
-      },
-    },
-  ],
-  messages: [
-    {
-      role: 'system',
-      content: 'You are a helpful assistant that can answer questions and help with tasks.',
-    },
-    {
-      role: 'user',
-      content: 'Test',
-    },
-  ],
-})
-console.log('Result:', text)
-// If tool_calls is not empty, it means the model has called the tool
-if (tool_calls) console.log('Tool Calls:', tool_calls)
-```
-
-You can check [chat.cpp](https://github.com/ggerganov/llama.cpp/blob/6eecde3cc8fda44da7794042e3668de4af3c32c6/common/chat.cpp#L7-L23) for models has native tool calling support, or it will fallback to `GENERIC` type tool call.
-
-The generic tool call will be always JSON object as output, the output will be like `{"response": "..."}` when it not decided to use tool call.
-
-## Grammar Sampling
-
-GBNF (GGML BNF) is a format for defining [formal grammars](https://en.wikipedia.org/wiki/Formal_grammar) to constrain model outputs in `llama.cpp`. For example, you can use it to force the model to generate valid JSON, or speak only in emojis.
-
-You can see [GBNF Guide](https://github.com/ggerganov/llama.cpp/tree/master/grammars) for more details.
-
-`llama.rn` provided a built-in function to convert JSON Schema to GBNF:
-
-Example gbnf grammar:
-```bnf
-root   ::= object
-value  ::= object | array | string | number | ("true" | "false" | "null") ws
-
-object ::=
-  "{" ws (
-            string ":" ws value
-    ("," ws string ":" ws value)*
-  )? "}" ws
-
-array  ::=
-  "[" ws (
-            value
-    ("," ws value)*
-  )? "]" ws
-
-string ::=
-  "\"" (
-    [^"\\\x7F\x00-\x1F] |
-    "\\" (["\\bfnrt] | "u" [0-9a-fA-F]{4}) # escapes
-  )* "\"" ws
-
-number ::= ("-"? ([0-9] | [1-9] [0-9]{0,15})) ("." [0-9]+)? ([eE] [-+]? [0-9] [1-9]{0,15})? ws
-
-# Optional space: by convention, applied in this grammar after literal chars when allowed
-ws ::= | " " | "\n" [ \t]{0,20}
-```
-
-```js
-import { initLlama } from 'llama.rn'
-
-const gbnf = '...'
-
-const context = await initLlama({
-  // ...params
-  grammar: gbnf,
-})
-
-const { text } = await context.completion({
-  // ...params
-  messages: [
-    {
-      role: 'system',
-      content: 'You are a helpful assistant that can answer questions and help with tasks.',
-    },
-    {
-      role: 'user',
-      content: 'Test',
-    },
-  ],
-})
-console.log('Result:', text)
-```
-
-Also, this is how `json_schema` works in `response_format` during completion, it converts the json_schema to gbnf grammar.
-
-## Parallel Decoding
-
-llama.rn supports slot-based parallel request processing for concurrent completion requests, enabling multiple prompts to be processed simultaneously with automatic queue management. It is similar to the llama.cpp server.
-
-### Usage
-
-```js
-import { initLlama } from 'llama.rn'
-
-const context = await initLlama({
-  model: modelPath,
-  n_ctx: 8192,
-  n_gpu_layers: 99,
-  n_parallel: 4, // Max number of parallel slots supported
-})
-
-// Enable parallel mode with 4 slots
-await context.parallel.enable({
-  n_parallel: 4, // new_n_ctx (2048) = n_ctx / n_parallel
-  n_batch: 512,
-})
-
-// Queue multiple completion requests
-const request1 = await context.parallel.completion(
-  {
-    messages: [{ role: 'user', content: 'What is AI?' }],
-    n_predict: 100,
-  },
-  (requestId, data) => {
-    console.log(`Request ${requestId}:`, data.token)
-  }
-)
-
-const request2 = await context.parallel.completion(
-  {
-    messages: [{ role: 'user', content: 'Explain quantum computing' }],
-    n_predict: 100,
-  },
-  (requestId, data) => {
-    console.log(`Request ${requestId}:`, data.token)
-  }
-)
-
-// Cancel a request if needed
-await request1.stop()
-
-// Wait for completion
-const result = await request2.promise
-console.log('Result:', result.text)
-
-// Disable parallel mode when done
-await context.parallel.disable()
-```
-
-### API
-
-**context.parallel.enable(config?):**
-- `config.n_parallel` (number): Number of concurrent slots (default: 2)
-- `config.n_batch` (number): Batch size for processing (default: 512)
-- Returns: `Promise<boolean>`
-
-**context.parallel.disable():**
-- Disables parallel mode
-- Returns: `Promise<boolean>`
-
-**context.parallel.configure(config):**
-- Reconfigures parallel mode (enables if not already enabled)
-- `config.n_parallel` (number): Number of concurrent slots
-- `config.n_batch` (number): Batch size for processing
-- Returns: `Promise<boolean>`
-
-**context.parallel.completion(params, onToken?):**
-- `params`: Same completion parameters as `completion()`
-- `onToken`: Optional callback `(requestId, data) => void` for token streaming
-  - `requestId`: Unique request identifier
-  - `data`: Token data with `token`, `content`, `reasoning_content`, `tool_calls`, `accumulated_text`
-- Returns: `Promise<{ requestId, promise, stop }>`
-  - `requestId`: Unique request identifier
-  - `promise`: Resolves to `NativeCompletionResult` when complete
-  - `stop`: Function to cancel this request
-
-**context.parallel.embedding(text, params?):**
-- `text`: Text content to get embedding for
-- `params`: Optional embedding parameters
-- Returns: `Promise<{ requestId, promise }>`
-  - `requestId`: Unique request identifier
-  - `promise`: Resolves to embedding result when complete
-
-**context.parallel.rerank(query, documents, params?):**
-- `query`: Query string for ranking
-- `documents`: Array of document strings to rank
-- `params`: Optional rerank parameters (e.g., `normalize`)
-- Returns: `Promise<{ requestId, promise }>`
-  - `requestId`: Unique request identifier
-  - `promise`: Resolves to rerank results when complete
-
-### Notes
-
-- Parallel mode uses slot-based architecture where each request occupies an available slot
-- Slots share the same KV cache for efficient memory usage
-- Request processing runs in a background loop that manages slot states automatically
-- All standard completion parameters (temperature, top_k, etc.) work per-request
-- The context must be initialized with sufficient `n_parallel` (default: 8) to support desired slot count
-- State load/save are not fully supported on Android with OpenCL backend, but you can set `kv_unified: true` and `flash_attn_type: 'off'` context parameter to enable it.
-
-## Session (State)
-
-The session file is a binary file that contains the state of the context, it can saves time of prompt processing.
-
-```js
-const context = await initLlama({ ...params })
-
-// After prompt processing or completion ...
-
-// Save the session
-await context.saveSession('<path to save session>')
-
-// Load the session
-await context.loadSession('<path to load session>')
-```
-
-### Notes
-
-- \* Session is currently not supported save state from multimodal context, so it only stores the text chunk before the first media chunk.
-
-## Embedding
-
-The embedding API is used to get the embedding of a text.
-
-```js
-const context = await initLlama({
-  ...params,
-  embedding: true,
-})
-
-const { embedding } = await context.embedding('Hello, world!')
-```
-
-- You can use model like [nomic-ai/nomic-embed-text-v1.5-GGUF](https://huggingface.co/nomic-ai/nomic-embed-text-v1.5-GGUF) for better embedding quality.
-- You can use DB like [op-sqlite](https://github.com/OP-Engineering/op-sqlite) with sqlite-vec support to store and search embeddings.
-
-## Rerank
-
-The rerank API is used to rank documents based on their relevance to a query. This is particularly useful for improving search results and implementing retrieval-augmented generation (RAG) systems.
-
-```js
-const context = await initLlama({
-  ...params,
-  embedding: true, // Required for reranking
-  pooling_type: 'rank', // Use rank pooling for rerank models
-})
-
-// Rerank documents based on relevance to query
-const results = await context.rerank(
-  'What is artificial intelligence?', // query
-  [
-    'AI is a branch of computer science.',
-    'The weather is nice today.',
-    'Machine learning is a subset of AI.',
-    'I like pizza.',
-  ], // documents to rank
-  {
-    normalize: 1, // Optional: normalize scores (default: from model config)
-  }
-)
-
-// Results are automatically sorted by score (highest first)
-results.forEach((result, index) => {
-  console.log(`Rank ${index + 1}:`, {
-    score: result.score,
-    document: result.document,
-    originalIndex: result.index,
-  })
-})
-```
-
-### Notes
-
-- **Model Requirements**: Reranking requires models with `RANK` pooling type (e.g., reranker models)
-- **Embedding Enabled**: The context must have `embedding: true` to use rerank functionality
-- **Automatic Sorting**: Results are returned sorted by relevance score in descending order
-- **Document Access**: Each result includes the original document text and its index in the input array
-- **Score Interpretation**: Higher scores indicate higher relevance to the query
-
-### Recommended Models
-
-- [jinaai - jina-reranker-v2-base-multilingual-GGUF](https://huggingface.co/gpustack/jina-reranker-v2-base-multilingual-GGUF)
-- [BAAI - bge-reranker-v2-m3-GGUF](https://huggingface.co/gpustack/bge-reranker-v2-m3-GGUF)
-- Other models with "rerank" or "reranker" in their name and GGUF format
-
-## Text-to-Speech (TTS)
-
-> [!WARNING]
-> **Experimental.** The TTS / codec integration is not production-ready. The API surface may change without a major version bump, and several model families do not yet produce correct speech on all backends — see [Tested models](#tested-models) before picking one.
-
-`llama.rn` runs on-device neural text-to-speech through [codec.cpp](https://github.com/mybigday/codec.cpp) as the audio-codec / vocoder backend. Load a TTS backbone as usual, attach its codec (vocoder) GGUF, then drive the synthesis flow the library detects for the model.
-
-### Supported models
-
-The model family is auto-detected natively; `getTTSCapabilities()` reports it and `getFormattedAudioCompletion()` returns the right synthesis `flow`.
-
-| Family | Variants | Flow |
-|---|---|---|
-| **OuteTTS** | v0.1 · v0.2 · v0.3 · v1.0 | `tokens` |
-| **Soprano** | 1.1 (80M) | `tokens` |
-| **NeuTTS** | Nano · Air *(needs a phonemizer)* | `tokens` |
-| **CSM** | 1B | `tokens` |
-| **Qwen3-TTS** | 0.6B | `tokens` |
-| **MOSS-TTSD** | v0.5 | `tokens` |
-| **MOSS-TTS-Realtime** | streaming interleave | `tokens` |
-| **Chatterbox (T3)** | English · 23-language multilingual | `tokens` |
-| **BlueMagpie-TTS** | Barbet backbone + AudioVAE | `continuous_embd` |
-
-"Supported" means the family is detected and wired end-to-end. It does **not** mean every family is verified on every backend — see [Tested models](#tested-models).
-
-There are two synthesis flows:
-
-- **`tokens`** — the standard completion loop drives the model (including the codec-LM AR step machine for CSM / Qwen3-TTS / MOSS / Chatterbox) and appends audio codes to `result.audio_tokens`; decode them with `decodeAudioTokens()`.
-- **`continuous_embd`** — continuous-latent models (BlueMagpie-TTS); the loop collects `result.embeddings` (+ `embedding_dim`), decoded with `decodeAudioEmbeddings()`.
-
-> Codec-LM AR and continuous-latent models must be initialized with `embedding: true`.
-
-### Usage
-
-```ts
-import { initLlama } from 'llama.rn'
-
-const ctx = await initLlama({
-  model: backbonePath,
-  n_gpu_layers: 99,
-  embedding: true, // required for codec-LM AR / continuous models
-})
-
-// Attach the codec / vocoder GGUF
-await ctx.initVocoder({ path: codecGgufPath, n_batch: 4096 }) // + optional use_gpu
-
-const caps = await ctx.getTTSCapabilities()
-// { type, family, promptKind, requiresPhonemes, defaultLanguage }
-
-// Build the model-specific prompt + resolve the flow
-const { prompt, grammar, embedding, flow } = await ctx.getFormattedAudioCompletion({
-  prompt: 'Hello world',
-  speaker: 'default', // built-in voice name, a LlamaSpeaker (voice clone), or omit for the family default
-  // supply a phonemizer only for models that need it (caps.requiresPhonemes)
-  phonemizer: caps.requiresPhonemes ? (text, lang) => toIPA(text, { language: lang }) : undefined,
-})
-
-// Drive the completion loop, then decode to PCM float samples
-const result = await ctx.completion({ prompt, grammar, embedding, temperature: 0.7, top_p: 0.9 })
-const sampleRate = await ctx.getAudioSampleRate()
-
-const pcm = flow === 'continuous_embd'
-  ? new Float32Array(await ctx.decodeAudioEmbeddings(result.embeddings, result.embedding_dim))
-  : new Float32Array(await ctx.decodeAudioTokens(result.audio_tokens ?? []))
-
-await ctx.releaseVocoder() // free the codec graphs when done
-```
-
-### Voice cloning
-
-Create a native speaker handle from a reference clip and pass it as `speaker`. The reference is encoded lazily on first use (or eagerly via `spk.bake()`); the embedding lives natively (no per-call copy, no JSON marshaling) and is injected at the model's speaker position automatically:
-
-```ts
-const spk = await ctx.createSpeaker({
-  refAudio,                 // Float32Array (mono reference audio)
-  refAudioSampleRate: 24000,
-  refText: 'reference transcript',
-})
-const { prompt, embedding, flow } = await ctx.getFormattedAudioCompletion({ prompt: 'Hello world', speaker: spk })
-// ...drive the flow as above — the speaker is armed automatically...
-await spk.release()         // free the native speaker when done
-```
-
-### Tested models
-
-Every family in the catalog was run end-to-end (load → synthesize → decode) on an Apple M1 Max (Metal and CPU) and a Galaxy S25 Ultra / Snapdragon 8 Elite (Hexagon HTP and CPU), then the generated audio was transcribed with Whisper large-v3-turbo to check it actually says the requested text.
-
-Legend: ✅ pass · ⚠️ works but output is unreliable · ❌ fails · — not runnable on that backend.
-
-| Family | Metal | macOS CPU | Hexagon HTP | Android CPU | Speech matches input |
-|---|:--:|:--:|:--:|:--:|---|
-| **CSM** 1B | ✅ | ✅ | ✅ | ✅ | ✅ Consistently correct |
-| **Chatterbox** multilingual | ✅ | ✅ | ✅ | ✅ | ✅ Consistently correct |
-| **BlueMagpie-TTS** Barbet-1B | ✅ | ✅ | ❌ cDSP crash on init | ✅ | ✅ Consistently correct |
-| **MOSS-TTS-Realtime** | ✅ | ✅ | ❌ OOM | ❌ OOM | ✅ Correct where it runs |
-| **NeuTTS** Nano · Air | ✅ | ✅ | ✅ | ✅ | ⚠️ Unstable / often garbled |
-| **MOSS-TTSD** v0.5 | ❌ grammar error | ✅ | ❌ grammar error | ✅ | ⚠️ Partial at best |
-| **OuteTTS** v0.3 | ✅ | ✅ | ✅ | ✅ | ⚠️ First word occasionally garbled (model-inherent — upstream llama.cpp `llama-tts` shows the same; use top_k 4) |
-| **OuteTTS** v1.0 | ✅ | ✅ | ✅ | ✅ | ✅ Correct (Metal/macOS verified after speaker + grammar fixes) |
-| **Soprano** 1.1 | ✅ | ✅ | ✅ | ✅ | ❌ Does not match |
-| **Qwen3-TTS** 0.6B | ✅ | ✅ | ✅ | ✅ | ✅ Correct on latest run |
-| **OuteTTS** v0.1 · v0.2 | — | — | — | — | Not covered by this run |
-
-Caveats:
-
-- The last column is a Whisper content check, not an audio-quality (MOSS/MOS) score. Short clips can produce false negatives, so treat ⚠️ as "needs a manual listen", not as a confirmed bug.
-- A ✅ in a backend column only means the pipeline produced structurally valid, finite audio — read it together with the last column.
-- MOSS-TTS-Realtime needs more RAM than a 12 GB Android device can give it; Android's low-memory killer terminates the app during load on both HTP and CPU.
-- On Apple Silicon, CPU-only inference (`n_gpu_layers: 0`) additionally hits a `SIGILL` in the q4_K repack kernel inside the iOS runtime, so the Metal path is the only supported one there for now.
-- One-pass functional runs from Debug builds, not a statistically sampled benchmark.
-
-### Notes
-
-- `isVocoderEnabled()` reports whether a codec is attached; `releaseVocoder()` frees the codec graphs when you're done.
-- The example app's **Text-to-Speech** screen wires each family end-to-end (download → init → synthesize → play).
-- This is audio *output*. Audio *input* (understanding) is a separate feature — see [Multimodal (Vision & Audio)](#multimodal-vision--audio).
-
-## Mock `llama.rn`
-
-We have provided a mock version of `llama.rn` for testing purpose you can use on Jest:
-
-```js
-jest.mock('llama.rn', () => require('llama.rn/jest/mock'))
-```
-
-## NOTE
-
-iOS:
-
-- The [Extended Virtual Addressing](https://developer.apple.com/documentation/bundleresources/entitlements/com_apple_developer_kernel_extended-virtual-addressing) and [Increased Memory Limit](https://developer.apple.com/documentation/bundleresources/entitlements/com.apple.developer.kernel.increased-memory-limit?language=objc) capabilities are recommended to enable on iOS project.
-- Metal:
-  - We have tested to know some devices is not able to use Metal (GPU) due to llama.cpp used SIMD-scoped operation, you can check if your device is supported in [Metal feature set tables](https://developer.apple.com/metal/Metal-Feature-Set-Tables.pdf), Apple7 GPU will be the minimum requirement.
-  - It's also not supported in iOS simulator due to [this limitation](https://developer.apple.com/documentation/metal/developing_metal_apps_that_run_in_simulator#3241609), we used constant buffers more than 14.
-
-Android:
-
-- Currently only supported arm64-v8a / x86_64 platform, this means you can't initialize a context on another platforms. The 64-bit platform are recommended because it can allocate more memory for the model.
-- The OpenCL backend is supported, but currently it limited to Qualcomm Adreno GPU and Q4_0 / Q6_K data types. Please check [OpenCL backend](https://github.com/ggml-org/llama.cpp/blob/master/docs/backend/OPENCL.md) for more details.
+The loader picks the CPU variant as usual and loads it from the pack. If any pack library fails to load, it records the error and loads the bundled engine for this launch. Your app should then delete that pack.
 
 ## Contributing
 
-See the [contributing guide](CONTRIBUTING.md) to learn how to contribute to the repository and the development workflow.
+Open issues and pull requests on [off-grid-ai/llama.rn-evergreen](https://github.com/off-grid-ai/llama.rn-evergreen). Fixes that are not specific to this fork also go upstream to llama.rn. See [CONTRIBUTING.md](CONTRIBUTING.md) for the development workflow.
 
-## Apps using `llama.rn`
+## Credits and license
 
-- [BRICKS](https://bricks.tools): Our product for building interactive signage in simple way. We provide LLM functions as Generator LLM/Assistant.
-- [ChatterUI](https://github.com/Vali-98/ChatterUI): Simple frontend for LLMs built in react-native.
-- [PocketPal AI](https://github.com/a-ghorbani/pocketpal-ai): An app that brings language models directly to your phone.
-- [InferrLM](https://github.com/sbhjt-gr/InferrLM): On-device AI for iOS & Android.
-- [Airgap](https://github.com/xmpuspus/airgap): Open-source React Native framework for shipping on-device, offline-first customer support chatbots. Runs Gemma 4 E2B locally via `llama.rn`. Seven industry templates ship in the repo (telco, retail, healthcare, banking, education, insurance, airlines).
+Built on [llama.rn](https://github.com/mybigday/llama.rn) by BRICKS (Jhen-Jie Hong and contributors) and on [llama.cpp](https://github.com/ggml-org/llama.cpp) by ggml-org. Both are MIT licensed.
 
-## Node.js binding
-
-- [llama.node](https://github.com/mybigday/llama.node): An another Node.js binding of `llama.cpp` but made API same as `llama.rn`.
-
-## License
-
-MIT
-
----
-
-Made with [create-react-native-library](https://github.com/callstack/react-native-builder-bob)
-
----
-
-<p align="center">
-  <a href="https://bricks.tools">
-    <img width="90px" src="https://avatars.githubusercontent.com/u/17320237?s=200&v=4">
-  </a>
-  <p align="center">
-    Built and maintained by <a href="https://bricks.tools">BRICKS</a>.
-  </p>
-</p>
+MIT. [LICENSE](LICENSE) keeps llama.rn's notice, and [NOTICE](NOTICE) lists the licences of the vendored code.
