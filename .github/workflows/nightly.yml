@@ -1,0 +1,481 @@
+name: Nightly
+
+# Sync the vendored llama.cpp to its newest bNNNNN release, build the Android
+# libraries, the iOS xcframework and the Android engine packs, test, and
+# publish @offgrid/llama.rn as a GitHub Release. A broken step leaves the sync
+# branch pushed and opens (or updates) a PR that names the step.
+
+on:
+  schedule:
+    - cron: '30 2 * * *'
+  workflow_dispatch:
+    inputs:
+      llama_cpp_ref:
+        description: llama.cpp bNNNNN tag to sync to (blank = newest)
+        required: false
+        type: string
+      publish:
+        description: Publish even when llama.cpp is unchanged (bumps the .N suffix)
+        required: false
+        default: false
+        type: boolean
+
+concurrency:
+  group: nightly
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  pull-requests: write
+  id-token: write # npm provenance
+
+env:
+  SYNC_BRANCH: auto/sync-llama.cpp
+  # Engine packs carry the JNI wrapper, which links React Native: build them
+  # against the app's exact React Native version and NDK.
+  ENGINE_PACK_REACT_NATIVE: '0.83.1'
+  ENGINE_PACK_NDK: '27.1.12297006'
+  # Engine packs and their signed manifest go to Cloudflare R2, like the
+  # desktop runtime packs. Until the R2 secrets exist, the manifest points at
+  # the GitHub Release instead.
+  ENGINE_PACK_PUBLIC_URL: https://mobile-runtime.getoffgridai.co
+  R2_ENDPOINT: https://0693da34a224264a4ec10f07fc8336ae.r2.cloudflarestorage.com
+  R2_BUCKET: offgrid-mobile-engine-packs
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    outputs:
+      head_sha: ${{ steps.push.outputs.head_sha }}
+      has_changes: ${{ steps.push.outputs.has_changes }}
+      sync_result: ${{ steps.sync.outcome }}
+      previous_tag: ${{ steps.info.outputs.previous_tag }}
+      current_tag: ${{ steps.info.outputs.current_tag }}
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          lfs: true
+
+      - name: Configure Git
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Prepare sync branch
+        id: base
+        run: |
+          # While a failed sync's PR is open, stack on its branch so fixes pushed
+          # there survive. Otherwise start over from main.
+          OPEN_PR=$(gh pr list --head "$SYNC_BRANCH" --base main --state open --json number --jq '.[0].number // empty')
+          if [[ -n "$OPEN_PR" ]] && git rev-parse --verify --quiet "origin/$SYNC_BRANCH" >/dev/null; then
+            echo "PR #$OPEN_PR is open, continuing on origin/$SYNC_BRANCH"
+            git checkout -B "$SYNC_BRANCH" "origin/$SYNC_BRANCH"
+            echo "force=false" >> "$GITHUB_OUTPUT"
+          else
+            git checkout -B "$SYNC_BRANCH" origin/main
+            echo "force=true" >> "$GITHUB_OUTPUT"
+          fi
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+      - name: Sync llama.cpp
+        id: sync
+        continue-on-error: true
+        run: ./scripts/update-llama-cpp.sh
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          LLAMA_CPP_TARGET_REF: ${{ inputs.llama_cpp_ref || '' }}
+
+      - name: Set package version
+        id: version
+        if: steps.sync.outcome == 'success'
+        run: |
+          REF=$(sed -n 's/^LLAMA_CPP_REF=//p' vendor/VERSIONS)
+          CURRENT=$(node -p "require('./package.json').version")
+          # <upstream x.y.z>-<bNNNNN>[.N]; .N only when republishing one llama.cpp tag
+          BASE="${CURRENT%%-*}-$REF"
+          if [[ "$CURRENT" == "$BASE"* && "$FORCE_PUBLISH" != "true" ]]; then
+            echo "version=$CURRENT" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          VERSION="$BASE"
+          N=0
+          while git rev-parse -q --verify "refs/tags/v$VERSION" >/dev/null || [[ "$VERSION" == "$CURRENT" ]]; do
+            N=$((N + 1))
+            VERSION="$BASE.$N"
+          done
+          npm version "$VERSION" --no-git-tag-version --allow-same-version >/dev/null
+          # Read by the README's llama.cpp badge
+          node -e "const fs=require('fs');const p=JSON.parse(fs.readFileSync('package.json'));p.offgrid={...p.offgrid,llamaCpp:process.argv[1]};fs.writeFileSync('package.json',JSON.stringify(p,null,2)+'\\n')" "$REF"
+          git add package.json package-lock.json
+          git commit -m "chore(release): $VERSION"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+        env:
+          FORCE_PUBLISH: ${{ inputs.publish && 'true' || 'false' }}
+
+      - name: Push sync branch
+        id: push
+        run: |
+          if [[ "$FORCE" == "true" ]]; then
+            git push --force-with-lease origin "$SYNC_BRANCH"
+          else
+            git push origin "$SYNC_BRANCH"
+          fi
+          echo "head_sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          if [[ "$(git rev-list --count origin/main..HEAD)" -gt 0 ]]; then
+            echo "has_changes=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "Branch matches main; nothing to build or publish"
+            echo "has_changes=false" >> "$GITHUB_OUTPUT"
+          fi
+        env:
+          FORCE: ${{ steps.base.outputs.force }}
+
+      - name: Collect llama.cpp version info
+        id: info
+        run: |
+          echo "previous_tag=$(git show origin/main:vendor/VERSIONS | sed -n 's/^LLAMA_CPP_REF=//p')" >> "$GITHUB_OUTPUT"
+          echo "current_tag=$(sed -n 's/^LLAMA_CPP_REF=//p' vendor/VERSIONS)" >> "$GITHUB_OUTPUT"
+
+      - name: Fail if the sync failed
+        if: steps.sync.outcome == 'failure'
+        run: exit 1
+
+  build-android:
+    needs: sync
+    if: needs.sync.outputs.has_changes == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Maximize build space
+        run: sudo rm -rf /usr/share/dotnet /opt/ghc /opt/hostedtoolcache
+
+      - name: Checkout sync branch
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.sync.outputs.head_sha }}
+          lfs: true
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Bootstrap
+        run: npm run bootstrap
+
+      - name: Build Android libraries
+        run: npm run build:android-libs
+
+      - name: Package Android JNI libraries
+        run: tar -czf llama-rn-android-jni-libs.tar.gz android/src/main/jniLibs
+
+      - name: Upload Android build
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-build
+          path: |
+            bin/
+            llama-rn-android-jni-libs.tar.gz
+          retention-days: 3
+
+  build-ios:
+    needs: sync
+    if: needs.sync.outputs.has_changes == 'true'
+    runs-on: macos-26
+    outputs:
+      ios_result: ${{ steps.ios.outcome }}
+      cpp_result: ${{ steps.cpp.outcome }}
+      ts_result: ${{ steps.ts.outcome }}
+    steps:
+      - name: Checkout sync branch
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.sync.outputs.head_sha }}
+          lfs: true
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Bootstrap
+        run: npm run bootstrap
+
+      # Independent checks: run all so the PR lists every failure.
+      - name: Build iOS xcframework
+        id: ios
+        continue-on-error: true
+        run: npm run build:ios-frameworks
+
+      - name: Run C++ unit tests
+        id: cpp
+        continue-on-error: true
+        run: |
+          cd tests
+          mkdir -p build && cd build
+          cmake .. && make -j"$(sysctl -n hw.ncpu)" && ./rnllama_tests
+
+      - name: Typecheck, unit-test and build TypeScript
+        id: ts
+        continue-on-error: true
+        run: npm run typecheck && npm test -- --maxWorkers=2 && npm run build
+
+      - name: Package iOS xcframework
+        if: steps.ios.outcome == 'success'
+        run: COPYFILE_DISABLE=1 tar -czf llama-rn-ios-xcframework.tar.gz ios/rnllama.xcframework
+
+      - name: Upload iOS build
+        if: steps.ios.outcome == 'success'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-build
+          path: llama-rn-ios-xcframework.tar.gz
+          retention-days: 3
+
+      - name: Fail if any check failed
+        if: steps.ios.outcome == 'failure' || steps.cpp.outcome == 'failure' || steps.ts.outcome == 'failure'
+        run: exit 1
+
+  engine-packs:
+    needs: [sync, build-android]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Maximize build space
+        run: sudo rm -rf /usr/share/dotnet /opt/ghc /opt/hostedtoolcache/CodeQL
+
+      - name: Checkout sync branch
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.sync.outputs.head_sha }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: zulu
+          java-version: '17'
+
+      - name: Install NDK
+        run: yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "ndk;$ENGINE_PACK_NDK" >/dev/null
+
+      - name: Download Android build
+        uses: actions/download-artifact@v4
+        with:
+          name: android-build
+
+      - name: Pack the npm tarball
+        run: |
+          tar -xzf llama-rn-android-jni-libs.tar.gz
+          npm ci --ignore-scripts
+          npm pack --pack-destination "$RUNNER_TEMP"
+
+      # A throwaway app on the app's React Native compiles the JNI wrapper
+      # exactly as the app's own Gradle build would.
+      - name: Build the host app
+        run: |
+          cd "$RUNNER_TEMP"
+          npx --yes @react-native-community/cli@latest init EnginePackHost \
+            --version "$ENGINE_PACK_REACT_NATIVE" --skip-git-init --install-pods false --pm npm
+          cd EnginePackHost
+          npm install --ignore-scripts "$RUNNER_TEMP"/offgrid-llama.rn-*.tgz
+          PKG=node_modules/@offgrid/llama.rn
+          cp -R "$GITHUB_WORKSPACE/android/src/main/jniLibs" "$PKG/android/src/main/"
+          cp -R "$GITHUB_WORKSPACE/bin" "$PKG/"
+          cd android
+          echo "ndkVersion=$ENGINE_PACK_NDK" >> gradle.properties
+          sed -i "s/ndkVersion = \".*\"/ndkVersion = \"$ENGINE_PACK_NDK\"/" build.gradle
+          ./gradlew assembleRelease -PreactNativeArchitectures=arm64-v8a,x86_64 --no-daemon
+
+      - name: Make engine packs
+        run: |
+          APK=$(ls "$RUNNER_TEMP"/EnginePackHost/android/app/build/outputs/apk/release/*.apk | head -1)
+          mkdir -p "$RUNNER_TEMP/apk" dist
+          unzip -q "$APK" 'lib/*' 'assets/ggml-hexagon/*' -d "$RUNNER_TEMP/apk"
+          node scripts/engine-pack.js pack arm64-v8a "$RUNNER_TEMP/apk/lib/arm64-v8a" "$RUNNER_TEMP/apk/assets/ggml-hexagon" --out dist
+          node scripts/engine-pack.js pack x86_64 "$RUNNER_TEMP/apk/lib/x86_64" --out dist
+
+      - name: Upload engine packs
+        uses: actions/upload-artifact@v4
+        with:
+          name: engine-packs
+          path: dist/
+          retention-days: 3
+
+  publish:
+    needs: [sync, build-android, build-ios, engine-packs]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout sync branch
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.sync.outputs.head_sha }}
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Download builds
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Assemble the package
+        run: |
+          mv artifacts/android-build/llama-rn-android-jni-libs.tar.gz artifacts/ios-build/llama-rn-ios-xcframework.tar.gz .
+          cp -R artifacts/android-build/bin .
+          npm ci --ignore-scripts
+          node ./install/write-native-artifacts-manifest.js
+          BRIDGE=$(node scripts/engine-pack.js bridge)
+          node -e "const fs=require('fs');const p=JSON.parse(fs.readFileSync('package.json'));p.offgrid={...p.offgrid,engineBridge:process.argv[1]};fs.writeFileSync('package.json',JSON.stringify(p,null,2)+'\n')" "$BRIDGE"
+          npm pack
+
+      - name: Sign the engine manifest
+        id: manifest
+        run: |
+          if [[ -n "$R2_ACCESS_KEY_ID" ]]; then
+            BASE_URL="$ENGINE_PACK_PUBLIC_URL/android/$VERSION"
+            echo "r2=true" >> "$GITHUB_OUTPUT"
+          else
+            BASE_URL="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/releases/download/v$VERSION"
+            echo "r2=false" >> "$GITHUB_OUTPUT"
+          fi
+          node scripts/engine-pack.js manifest --out artifacts/engine-packs \
+            --version "$VERSION" --llama-cpp "$LLAMA_CPP" --react-native "$ENGINE_PACK_REACT_NATIVE" \
+            --base-url "$BASE_URL"
+          node scripts/engine-pack.js sign artifacts/engine-packs/manifest.json
+          node scripts/engine-pack.js verify artifacts/engine-packs/manifest.json install/engine-signing-public-key.pem
+        env:
+          VERSION: ${{ needs.sync.outputs.version }}
+          LLAMA_CPP: ${{ needs.sync.outputs.current_tag }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          ENGINE_SIGNING_PRIVATE_KEY: ${{ secrets.ENGINE_SIGNING_PRIVATE_KEY }}
+
+      - name: Merge to main and tag
+        run: |
+          git push origin "HEAD:refs/heads/main"
+          git tag "v$VERSION"
+          git push origin "v$VERSION"
+        env:
+          VERSION: ${{ needs.sync.outputs.version }}
+
+      - name: Create GitHub Release
+        run: |
+          gh release create "v$VERSION" \
+            offgrid-llama.rn-"$VERSION".tgz \
+            llama-rn-android-jni-libs.tar.gz \
+            llama-rn-ios-xcframework.tar.gz \
+            artifacts/engine-packs/engine-pack-*.zip \
+            artifacts/engine-packs/manifest.json \
+            artifacts/engine-packs/manifest.json.sig \
+            install/engine-signing-public-key.pem \
+            --title "v$VERSION" \
+            --notes "@offgrid/llama.rn $VERSION on llama.cpp [$LLAMA_CPP](https://github.com/ggml-org/llama.cpp/releases/tag/$LLAMA_CPP).
+
+          Install: \`npm install $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/releases/download/v$VERSION/offgrid-llama.rn-$VERSION.tgz\`"
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.sync.outputs.version }}
+          LLAMA_CPP: ${{ needs.sync.outputs.current_tag }}
+
+      - name: Upload engine packs to R2
+        if: steps.manifest.outputs.r2 == 'true'
+        run: node scripts/engine-pack.js upload artifacts/engine-packs android "$VERSION"
+        env:
+          VERSION: ${{ needs.sync.outputs.version }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+
+      - name: Publish to npm
+        run: |
+          if [[ -z "$NODE_AUTH_TOKEN" ]]; then
+            echo "NPM_TOKEN is not set; the tarball is on the GitHub Release only"
+            exit 0
+          fi
+          echo "//registry.npmjs.org/:_authToken=${NODE_AUTH_TOKEN}" > ~/.npmrc
+          npm publish offgrid-llama.rn-"$VERSION".tgz --access public --provenance
+        env:
+          VERSION: ${{ needs.sync.outputs.version }}
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+  # A failed step leaves the sync branch pushed; the PR names what broke.
+  report:
+    needs: [sync, build-android, build-ios, engine-packs, publish]
+    if: always() && needs.sync.outputs.has_changes == 'true' && needs.publish.result != 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Open or update the PR
+        run: |
+          check() {
+            case "$1" in
+              success) echo "- ✅ $2" ;;
+              failure) echo "- ❌ $2 (failed)" ;;
+              cancelled) echo "- 🚫 $2 (cancelled)" ;;
+              *) echo "- ⏭️ $2 (skipped)" ;;
+            esac
+          }
+          BROKEN=()
+          [[ "$SYNC_RESULT" == "success" ]] || BROKEN+=("vendor sync")
+          [[ "$ANDROID_RESULT" == "success" ]] || BROKEN+=("Android libraries")
+          [[ "$IOS_RESULT" == "success" ]] || BROKEN+=("iOS xcframework")
+          [[ "$CPP_RESULT" == "success" ]] || BROKEN+=("C++ tests")
+          [[ "$TS_RESULT" == "success" ]] || BROKEN+=("TypeScript checks")
+          [[ "$PACKS_RESULT" == "success" ]] || BROKEN+=("engine packs")
+          [[ "$PUBLISH_RESULT" == "success" ]] || BROKEN+=("publish")
+          FIRST="${BROKEN[0]}"
+
+          BODY="Nightly sync of llama.cpp \`$PREVIOUS_TAG\` → \`$CURRENT_TAG\` (package \`$VERSION\`) stopped at: **$FIRST**.
+
+          $(check "$SYNC_RESULT" "Vendor sync (scripts/update-llama-cpp.sh)")
+          $(check "$ANDROID_RESULT" "Android libraries")
+          $(check "$IOS_RESULT" "iOS xcframework")
+          $(check "$CPP_RESULT" "C++ unit tests")
+          $(check "$TS_RESULT" "Typecheck, Jest, TypeScript build")
+          $(check "$PACKS_RESULT" "Engine packs (RN $ENGINE_PACK_REACT_NATIVE host build)")
+          $(check "$PUBLISH_RESULT" "Publish (sign, merge, tag, release)")
+
+          Logs: $RUN_URL
+
+          Push fixes to \`$SYNC_BRANCH\`; the next nightly builds on top of it while this PR is open. If the fix is not Off Grid specific, upstream it to mybigday/llama.rn."
+
+          TITLE="nightly: llama.cpp $CURRENT_TAG broken at $FIRST"
+          EXISTING=$(gh pr list --head "$SYNC_BRANCH" --base main --state open --json number --jq '.[0].number // empty')
+          if [[ -n "$EXISTING" ]]; then
+            gh pr edit "$EXISTING" --title "$TITLE" --body "$BODY"
+          else
+            gh pr create --head "$SYNC_BRANCH" --base main --title "$TITLE" --body "$BODY"
+          fi
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          PREVIOUS_TAG: ${{ needs.sync.outputs.previous_tag }}
+          CURRENT_TAG: ${{ needs.sync.outputs.current_tag }}
+          VERSION: ${{ needs.sync.outputs.version }}
+          SYNC_RESULT: ${{ needs.sync.outputs.sync_result }}
+          ANDROID_RESULT: ${{ needs.build-android.result }}
+          IOS_RESULT: ${{ needs.build-ios.outputs.ios_result }}
+          CPP_RESULT: ${{ needs.build-ios.outputs.cpp_result }}
+          TS_RESULT: ${{ needs.build-ios.outputs.ts_result }}
+          PACKS_RESULT: ${{ needs.engine-packs.result }}
+          PUBLISH_RESULT: ${{ needs.publish.result }}
