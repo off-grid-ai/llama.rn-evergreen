@@ -2,7 +2,7 @@
 
 [![Nightly](https://github.com/off-grid-ai/llama.rn-evergreen/actions/workflows/nightly.yml/badge.svg)](https://github.com/off-grid-ai/llama.rn-evergreen/actions/workflows/nightly.yml)
 [![llama.cpp](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fraw.githubusercontent.com%2Foff-grid-ai%2Fllama.rn-evergreen%2Fmain%2Fpackage.json&query=%24.offgrid.llamaCpp&label=llama.cpp)](https://github.com/ggml-org/llama.cpp/releases)
-[![npm](https://img.shields.io/npm/v/@offgrid/llama.rn.svg)](https://www.npmjs.com/package/@offgrid/llama.rn)
+[![Release](https://img.shields.io/github/v/release/off-grid-ai/llama.rn-evergreen?include_prereleases)](https://github.com/off-grid-ai/llama.rn-evergreen/releases)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 [llama.rn](https://github.com/mybigday/llama.rn) on the newest [llama.cpp](https://github.com/ggml-org/llama.cpp), rebuilt every night.
@@ -17,21 +17,17 @@ Off Grid AI maintains it for its mobile app. The API is the same as llama.rn.
 
 ## Install
 
-```sh
-npm install @offgrid/llama.rn
-```
-
-To keep `import ... from 'llama.rn'` unchanged, install it under the old name:
+Each GitHub Release carries the npm tarball. Install it under the name `llama.rn` so your imports stay unchanged:
 
 ```json
-{ "dependencies": { "llama.rn": "npm:@offgrid/llama.rn@0.13.0-b12032" } }
+{
+  "dependencies": {
+    "llama.rn": "https://github.com/off-grid-ai/llama.rn-evergreen/releases/download/v0.13.0-b12032/offgrid-llama.rn-0.13.0-b12032.tgz"
+  }
+}
 ```
 
-Each GitHub Release also carries the npm tarball:
-
-```sh
-npm install https://github.com/off-grid-ai/llama.rn-evergreen/releases/download/v<version>/offgrid-llama.rn-<version>.tgz
-```
+Publishing to npm as `@offgrid/llama.rn` is coming.
 
 Versions are `<llama.rn version>-<llama.cpp tag>`, for example `0.13.0-b12032`. A `.N` suffix marks a rebuild on the same llama.cpp tag.
 
@@ -39,7 +35,10 @@ Versions are `<llama.rn version>-<llama.cpp tag>`, for example `0.13.0-b12032`. 
 
 A pack is the full `librnllama*.so` set for one Android ABI: the core library and the JNI wrapper of every CPU variant, plus the Hexagon HTP libraries under `htp/` (arm64-v8a only). The JNI wrapper is compiled against llama.cpp headers and React Native, so a pack only fits an app built on the same React Native version and the same Java/JS bridge.
 
-**Where.** Each GitHub Release carries `engine-pack-<abi>.zip`, `manifest.json`, `manifest.json.sig` and `engine-signing-public-key.pem`. Hosting on Cloudflare R2 is coming: `https://mobile-runtime.getoffgridai.co/android/manifest.json` (newest) and `https://mobile-runtime.getoffgridai.co/android/<version>/…` (immutable). Until then the manifest's `url`s point at the GitHub Release.
+**Where.** Each GitHub Release carries `engine-pack-<abi>.zip`, `manifest.json`, `manifest.json.sig` and `engine-signing-public-key.pem`. The same files are on Cloudflare R2. The pack `url`s in the manifest point there:
+
+- `https://mobile-runtime.getoffgridai.co/android/manifest.json` and `manifest.json.sig`: the newest release
+- `https://mobile-runtime.getoffgridai.co/android/<version>/`: one release's packs and manifest, never changed
 
 **manifest.json** (schema 1):
 
