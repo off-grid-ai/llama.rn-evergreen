@@ -637,15 +637,28 @@ jobs:
           R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
           R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
 
+  # The registry is the last copy; a registry problem never fails the build or
+  # the GitHub Release, which already carries the same tarball.
+  npm:
+    needs: [sync, publish]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: '20'
+          registry-url: https://registry.npmjs.org
+
       - name: Publish to npm
         run: |
           if [[ -z "$NODE_AUTH_TOKEN" ]]; then
             echo "NPM_TOKEN is not set; the tarball is on the GitHub Release only"
             exit 0
           fi
-          echo "//registry.npmjs.org/:_authToken=${NODE_AUTH_TOKEN}" > ~/.npmrc
-          npm publish offgrid-llama.rn-"$VERSION".tgz --access public --provenance
+          gh release download "v$VERSION" -R "$GITHUB_REPOSITORY" -p "offgrid-llama.rn-$VERSION.tgz"
+          npm publish "offgrid-llama.rn-$VERSION.tgz" --access public --provenance
         env:
+          GH_TOKEN: ${{ github.token }}
           VERSION: ${{ needs.sync.outputs.version }}
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
@@ -691,6 +704,12 @@ jobs:
           Logs: $RUN_URL
 
           Push fixes to \`$SYNC_BRANCH\`; the next nightly builds on top of it while this PR is open. If the fix is not Off Grid specific, upstream it to mybigday/llama.rn."
+
+          git fetch -q origin main "$SYNC_BRANCH"
+          if [[ "$(git rev-list --count origin/main..origin/$SYNC_BRANCH)" -eq 0 ]]; then
+            echo "$SYNC_BRANCH is already on main; nothing to open a PR for"
+            exit 0
+          fi
 
           TITLE="nightly: llama.cpp $CURRENT_TAG broken at $FIRST"
           EXISTING=$(gh pr list --head "$SYNC_BRANCH" --base main --state open --json number --jq '.[0].number // empty')
