@@ -418,6 +418,138 @@ jobs:
           path: dist/
           retention-days: 3
 
+  # Off Grid AI Mobile on this build. Not a publish gate: it needs
+  # OGA_READ_TOKEN for off-grid-ai/shared and skips without it.
+  ogam-android:
+    needs: [sync, build-android]
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      OGA_READ_TOKEN: ${{ secrets.OGA_READ_TOKEN }}
+      CCACHE_DIR: ${{ github.workspace }}/.ccache
+      CCACHE_MAXSIZE: 2G
+      CCACHE_COMPILERCHECK: content
+    steps:
+      - name: Checkout sync branch
+        if: env.OGA_READ_TOKEN != ''
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.sync.outputs.head_sha }}
+
+      - name: Setup Node.js
+        if: env.OGA_READ_TOKEN != ''
+        uses: actions/setup-node@v6
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Setup Java
+        if: env.OGA_READ_TOKEN != ''
+        uses: actions/setup-java@v4
+        with:
+          distribution: zulu
+          java-version: '17'
+
+      - name: Download Android build
+        if: env.OGA_READ_TOKEN != ''
+        uses: actions/download-artifact@v4
+        with:
+          name: android-build
+
+      - name: Cache ccache
+        if: env.OGA_READ_TOKEN != ''
+        uses: actions/cache@v4
+        continue-on-error: true
+        with:
+          path: ${{ github.workspace }}/.ccache
+          key: ${{ runner.os }}-ccache-nightly-ogam-android-${{ github.run_id }}
+          restore-keys: |
+            ${{ runner.os }}-ccache-nightly-ogam-android-
+
+      - name: Setup ccache
+        if: env.OGA_READ_TOKEN != ''
+        uses: ./.github/actions/setup-ccache
+
+      - name: Cache Gradle
+        if: env.OGA_READ_TOKEN != ''
+        uses: actions/cache@v4
+        continue-on-error: true
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: ${{ runner.os }}-gradle-nightly-ogam-${{ github.run_id }}
+          restore-keys: |
+            ${{ runner.os }}-gradle-nightly-ogam-
+
+      - name: Unpack the Android libraries
+        if: env.OGA_READ_TOKEN != ''
+        run: tar -xzf llama-rn-android-jni-libs.tar.gz
+
+      - name: Build Off Grid AI Mobile for Android
+        if: env.OGA_READ_TOKEN != ''
+        uses: ./.github/actions/build-ogam
+        with:
+          platform: android
+          read-token: ${{ secrets.OGA_READ_TOKEN }}
+
+  ogam-ios:
+    needs: [sync, build-ios]
+    runs-on: macos-26
+    timeout-minutes: 90
+    env:
+      OGA_READ_TOKEN: ${{ secrets.OGA_READ_TOKEN }}
+      CCACHE_DIR: ${{ github.workspace }}/.ccache
+      CCACHE_MAXSIZE: 2G
+      CCACHE_COMPILERCHECK: content
+      CCACHE_SLOPPINESS: time_macros,include_file_mtime,include_file_ctime,modules,clang_index_store,system_headers
+    steps:
+      - name: Checkout sync branch
+        if: env.OGA_READ_TOKEN != ''
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.sync.outputs.head_sha }}
+
+      - name: Setup Node.js
+        if: env.OGA_READ_TOKEN != ''
+        uses: actions/setup-node@v6
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Download iOS build
+        if: env.OGA_READ_TOKEN != ''
+        uses: actions/download-artifact@v4
+        with:
+          name: ios-build
+
+      - name: Cache ccache
+        if: env.OGA_READ_TOKEN != ''
+        uses: actions/cache@v4
+        continue-on-error: true
+        with:
+          path: ${{ github.workspace }}/.ccache
+          key: ${{ runner.os }}-ccache-nightly-ogam-ios-${{ github.run_id }}
+          restore-keys: |
+            ${{ runner.os }}-ccache-nightly-ogam-ios-
+
+      - name: Setup ccache
+        if: env.OGA_READ_TOKEN != ''
+        run: |
+          command -v ccache > /dev/null || brew install ccache
+          ccache --zero-stats
+
+      - name: Unpack the xcframework
+        if: env.OGA_READ_TOKEN != ''
+        run: tar -xzf llama-rn-ios-xcframework.tar.gz
+
+      - name: Build Off Grid AI Mobile for the iOS simulator
+        if: env.OGA_READ_TOKEN != ''
+        uses: ./.github/actions/build-ogam
+        with:
+          platform: ios
+          read-token: ${{ secrets.OGA_READ_TOKEN }}
+
   publish:
     needs: [sync, build-android, build-ios, engine-packs]
     runs-on: ubuntu-latest

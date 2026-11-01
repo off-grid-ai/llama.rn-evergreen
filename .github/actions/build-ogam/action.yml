@@ -1,0 +1,106 @@
+name: Build Off Grid AI Mobile
+description: >
+  Builds off-grid-ai/OGAM (main) on this checkout's package, installed from
+  its npm tarball the way the app depends on it, with the native libraries
+  this job built. Android: arm64-v8a debug APK. iOS: simulator debug build.
+  The fork's C++ tests cover engine behaviour; this proves the bridge, the
+  packaging and the app line up.
+
+inputs:
+  platform:
+    description: android or ios
+    required: true
+  read-token:
+    description: Token with read access to off-grid-ai/shared (OGA_READ_TOKEN)
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Check out OGAM
+      uses: actions/checkout@v4
+      with:
+        repository: off-grid-ai/OGAM
+        ref: main
+        path: ogam-app/OGAM
+        persist-credentials: false
+
+    # OGAM's @offgrid/* file: dependencies point at ../shared. pro/ is optional;
+    # the app builds against its stub without it.
+    - name: Check out shared
+      uses: actions/checkout@v4
+      with:
+        repository: off-grid-ai/shared
+        ref: main
+        token: ${{ inputs.read-token }}
+        path: ogam-app/shared
+        persist-credentials: false
+
+    - name: Pack this package
+      shell: bash
+      run: |
+        [ -d node_modules ] || npm ci --ignore-scripts
+        npm pack --pack-destination "$RUNNER_TEMP"
+
+    - name: Setup Node.js for OGAM
+      uses: actions/setup-node@v6
+      with:
+        node-version: '26'
+
+    - name: Install shared and OGAM
+      shell: bash
+      run: |
+        npm --prefix ogam-app/shared ci
+        for pkg in sync rag models speech ui; do
+          npm --prefix "ogam-app/shared/packages/$pkg" run build
+        done
+        npm --prefix ogam-app/OGAM ci
+
+    # Same package contents OGAM gets from the registry; the native libraries
+    # come from this run instead of the (not yet published) release.
+    - name: Install this package into OGAM
+      shell: bash
+      run: |
+        target=ogam-app/OGAM/node_modules/llama.rn
+        rm -rf "$target" && mkdir -p "$target"
+        tar -xzf "$RUNNER_TEMP"/offgrid-llama.rn-*.tgz --strip-components=1 -C "$target"
+        if [ "${{ inputs.platform }}" = android ]; then
+          cp -R android/src/main/jniLibs "$target/android/src/main/"
+          cp -R bin "$target/"
+        else
+          cp -R ios/rnllama.xcframework "$target/ios/"
+        fi
+        jq -r '.name + " " + .version' "$target/package.json"
+
+    - name: Build OGAM for Android (arm64-v8a)
+      if: inputs.platform == 'android'
+      shell: bash
+      run: |
+        cd ogam-app/OGAM/android
+        ./gradlew assembleDebug -PreactNativeArchitectures=arm64-v8a --no-daemon
+        unzip -l app/build/outputs/apk/debug/*.apk | grep librnllama
+
+    - name: Setup Ruby
+      if: inputs.platform == 'ios'
+      uses: ruby/setup-ruby@v1
+      with:
+        ruby-version: '3.3'
+        bundler-cache: true
+        working-directory: ogam-app/OGAM
+
+    - name: Build OGAM for the iOS simulator
+      if: inputs.platform == 'ios'
+      shell: bash
+      run: |
+        cd ogam-app/OGAM
+        bundle exec pod install --project-directory=ios
+        {
+          echo "CC = $PWD/node_modules/react-native/scripts/xcode/ccache-clang.sh"
+          echo "CXX = $PWD/node_modules/react-native/scripts/xcode/ccache-clang++.sh"
+          echo "CCACHE_BINARY = $(command -v ccache)"
+        } > "$RUNNER_TEMP/ccache.xcconfig"
+        XCODE_XCCONFIG_FILE="$RUNNER_TEMP/ccache.xcconfig" xcodebuild build \
+          -workspace ios/OffgridMobile.xcworkspace -scheme OffgridMobile \
+          -configuration Debug -sdk iphonesimulator -destination 'generic/platform=iOS Simulator' \
+          CODE_SIGNING_ALLOWED=NO -quiet
+        ccache --show-stats
