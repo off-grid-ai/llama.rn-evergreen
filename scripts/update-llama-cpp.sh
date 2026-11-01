@@ -28,6 +28,11 @@ LATEST_TAG=$(jq -r '
   | .tag_name // empty
 ' <<< "$RELEASES")
 
+# A workflow_dispatch input may pin a specific tag instead of the newest.
+if [[ -n "${LLAMA_CPP_TARGET_REF:-}" ]]; then
+  LATEST_TAG="$LLAMA_CPP_TARGET_REF"
+fi
+
 if [[ -z "$LATEST_TAG" ]]; then
   echo "❌ Failed to fetch latest build tag"
   exit 1
