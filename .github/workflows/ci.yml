@@ -148,6 +148,14 @@ jobs:
       - name: Setup
         uses: ./.github/actions/setup
 
+      # Newer runner JDKs print a restricted-method warning that AGP's prefab
+      # step reports as an error; React Native builds on JDK 17.
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: zulu
+          java-version: '17'
+
       - name: Setup Gradle cache
         uses: burrunan/gradle-cache-action@v3
         with:
@@ -215,6 +223,14 @@ jobs:
 
       - name: Setup
         uses: ./.github/actions/setup
+
+      # Newer runner JDKs print a restricted-method warning that AGP's prefab
+      # step reports as an error; React Native builds on JDK 17.
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: zulu
+          java-version: '17'
 
       - name: Setup Gradle cache
         uses: burrunan/gradle-cache-action@v3
