@@ -10,6 +10,7 @@
 //   engine-pack.js sign <manifest>               (ENGINE_SIGNING_PRIVATE_KEY: base64 PKCS#8 DER)
 //   engine-pack.js verify <manifest> <publicKeyPem>
 //   engine-pack.js upload <dir> <prefix> <version> (R2_ENDPOINT, R2_BUCKET, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY)
+//   engine-pack.js upload-files <prefix> <file>...  (same R2 environment; immutable)
 
 const crypto = require('crypto')
 const fs = require('fs')
@@ -214,6 +215,22 @@ function r2Put(key, body, contentType, cacheControl) {
   })
 }
 
+// The postinstall's native archives, fetched from R2 before GitHub Releases.
+function uploadFiles(prefix, files) {
+  return files.reduce(
+    (previous, file) =>
+      previous.then(() =>
+        r2Put(
+          `${prefix}/${path.basename(file)}`,
+          fs.readFileSync(file),
+          'application/gzip',
+          'public, max-age=31536000, immutable',
+        ),
+      ),
+    Promise.resolve(),
+  )
+}
+
 // Packs are immutable under <prefix>/<version>/; the manifest at <prefix>/
 // moves last, signature first, so a reader never sees a manifest whose packs
 // are missing.
@@ -302,6 +319,8 @@ function main(argv) {
     }
     case 'upload':
       return upload(args[0], args[1], args[2])
+    case 'upload-files':
+      return uploadFiles(args[0], args.slice(1))
     default:
       throw new Error(`Unknown command: ${command}`)
   }

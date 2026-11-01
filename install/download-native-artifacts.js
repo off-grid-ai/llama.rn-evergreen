@@ -26,7 +26,28 @@ function normalizeRepositoryUrl(repository) {
   return rawUrl.replace(/^git\+/, '').replace(/\.git$/, '').replace(/\/$/, '')
 }
 
-const releaseBaseUrl = `${normalizeRepositoryUrl(packageJson.repository)}/releases/download/v${packageJson.version}`
+// R2 first (GitHub Releases throttles large downloads), GitHub as the fallback.
+const baseUrls = (manifest.baseUrls || ['{repository}/releases/download/v{version}']).map(
+  (template) =>
+    template
+      .replace('{repository}', normalizeRepositoryUrl(packageJson.repository))
+      .replace('{version}', packageJson.version),
+)
+
+// Verified archives are kept per version in a user-level cache, so a reinstall
+// or a new worktree extracts from disk instead of downloading again.
+const cacheDir = path.join(
+  process.env.LLAMA_RN_ARTIFACT_CACHE ||
+    path.join(process.env.XDG_CACHE_HOME || path.join(os.homedir(), '.cache'), 'ogai-llama.rn'),
+  packageJson.version,
+)
+
+// iOS can only be built on macOS; LLAMA_RN_PLATFORMS=android,ios overrides.
+function wantedPlatforms() {
+  const requested = process.env.LLAMA_RN_PLATFORMS
+  if (requested) return requested.split(',').map((p) => p.trim().toLowerCase())
+  return process.platform === 'darwin' ? ['android', 'ios'] : ['android']
+}
 
 function resolvePackagePath(relativePath) {
   return path.join(packageRoot, relativePath)
@@ -182,36 +203,58 @@ function extractArchive(archivePath) {
   }
 }
 
-async function installArtifact(artifact) {
-  const url = `${releaseBaseUrl}/${artifact.assetName}`
-  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'llama-rn-'))
-  const archivePath = path.join(tempDir, artifact.assetName)
+function sha256File(filePath) {
+  return crypto.createHash('sha256').update(fs.readFileSync(filePath)).digest('hex')
+}
 
-  try {
-    console.log(`llama.rn: downloading ${artifact.assetName}`)
-    const checksum = await downloadArchive(url, archivePath)
-
-    if (checksum !== artifact.sha256) {
-      throw new Error(
-        `SHA-256 mismatch for ${artifact.assetName}: expected ${artifact.sha256}, received ${checksum}`,
-      )
-    }
-
-    removeIfExists(artifact.relativePath)
-    getMarkerPaths(artifact).forEach((markerPath) => removeIfExists(markerPath))
-    extractArchive(archivePath)
-
-    if (!targetExists(artifact.relativePath)) {
-      throw new Error(
-        `Missing extracted native artifact at ${artifact.relativePath}`,
-      )
-    }
-
-    writeMarker(artifact.markerPath, artifact.sha256)
-    console.log(`llama.rn: installed ${artifact.relativePath}`)
-  } finally {
-    fs.rmSync(tempDir, { force: true, recursive: true })
+async function fetchVerifiedArchive(artifact) {
+  const cachedPath = path.join(cacheDir, artifact.assetName)
+  if (fs.existsSync(cachedPath) && sha256File(cachedPath) === artifact.sha256) {
+    console.log(`llama.rn: using cached download ${cachedPath}`)
+    return cachedPath
   }
+
+  fs.mkdirSync(cacheDir, { recursive: true })
+  const partialPath = `${cachedPath}.${process.pid}.partial`
+  const failures = []
+  const tryUrl = async (baseUrl) => {
+    const url = `${baseUrl}/${artifact.assetName}`
+    try {
+      console.log(`llama.rn: downloading ${url}`)
+      const checksum = await downloadArchive(url, partialPath)
+      if (checksum !== artifact.sha256) {
+        throw new Error(`SHA-256 mismatch: expected ${artifact.sha256}, received ${checksum}`)
+      }
+      fs.renameSync(partialPath, cachedPath)
+      return true
+    } catch (error) {
+      fs.rmSync(partialPath, { force: true })
+      failures.push(`${url}: ${error.message}`)
+      return false
+    }
+  }
+  // One source at a time, in order, until one succeeds.
+  const done = await baseUrls.reduce(
+    (previous, baseUrl) => previous.then((ok) => ok || tryUrl(baseUrl)),
+    Promise.resolve(false),
+  )
+  if (done) return cachedPath
+  throw new Error(`Could not download ${artifact.assetName}:\n  ${failures.join('\n  ')}`)
+}
+
+async function installArtifact(artifact) {
+  const archivePath = await fetchVerifiedArchive(artifact)
+
+  removeIfExists(artifact.relativePath)
+  getMarkerPaths(artifact).forEach((markerPath) => removeIfExists(markerPath))
+  extractArchive(archivePath)
+
+  if (!targetExists(artifact.relativePath)) {
+    throw new Error(`Missing extracted native artifact at ${artifact.relativePath}`)
+  }
+
+  writeMarker(artifact.markerPath, artifact.sha256)
+  console.log(`llama.rn: installed ${artifact.relativePath}`)
 }
 
 async function main() {
@@ -238,7 +281,13 @@ async function main() {
     return
   }
 
+  const platforms = wantedPlatforms()
   const artifactsToInstall = artifacts.filter((artifact) => {
+    if (artifact.platform && !platforms.includes(artifact.platform)) {
+      console.log(`llama.rn: skipping ${artifact.relativePath} (not building ${artifact.platform} here)`)
+      return false
+    }
+
     const installedMarkerPath = force ? null : resolveInstalledMarkerPath(artifact)
 
     if (installedMarkerPath) {

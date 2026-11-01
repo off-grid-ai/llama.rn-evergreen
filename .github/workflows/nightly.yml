@@ -629,9 +629,12 @@ jobs:
           VERSION: ${{ needs.sync.outputs.version }}
           LLAMA_CPP: ${{ needs.sync.outputs.current_tag }}
 
-      - name: Upload engine packs to R2
+      - name: Upload engine packs and native archives to R2
         if: steps.manifest.outputs.r2 == 'true'
-        run: node scripts/engine-pack.js upload artifacts/engine-packs android "$VERSION"
+        run: |
+          node scripts/engine-pack.js upload artifacts/engine-packs android "$VERSION"
+          node scripts/engine-pack.js upload-files "native/v$VERSION" \
+            llama-rn-android-jni-libs.tar.gz llama-rn-ios-xcframework.tar.gz
         env:
           VERSION: ${{ needs.sync.outputs.version }}
           R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}

@@ -1,4 +1,8 @@
 {
+  "baseUrls": [
+    "https://mobile-runtime.getoffgridai.co/native/v{version}",
+    "{repository}/releases/download/v{version}"
+  ],
   "artifacts": [
     {
       "name": "android-jni-libs",
@@ -6,7 +10,8 @@
       "relativePath": "android/src/main/jniLibs",
       "markerPath": "android/src/main/jniLibs/.llama-rn.sha256",
       "legacyMarkerPath": "android/src/main/.llama-rn-android-jni-libs.sha256",
-      "sha256": null
+      "sha256": null,
+      "platform": "android"
     },
     {
       "name": "ios-xcframework",
@@ -14,7 +19,8 @@
       "relativePath": "ios/rnllama.xcframework",
       "markerPath": "ios/rnllama.xcframework/.llama-rn.sha256",
       "legacyMarkerPath": "ios/.llama-rn-ios-xcframework.sha256",
-      "sha256": null
+      "sha256": null,
+      "platform": "ios"
     }
   ]
 }
