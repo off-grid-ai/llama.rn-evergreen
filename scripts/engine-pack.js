@@ -18,7 +18,7 @@ const { execFileSync } = require('child_process')
 
 const packageRoot = path.resolve(__dirname, '..')
 const SCHEMA = 1
-const PACKAGE_NAME = '@offgrid/llama.rn'
+const PACKAGE_NAME = require('../package.json').name
 
 function sha256(data) {
   return crypto.createHash('sha256').update(data).digest('hex')

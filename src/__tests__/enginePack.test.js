@@ -95,7 +95,7 @@ describe('engine pack', () => {
 
     expect(manifest).toMatchObject({
       schema: 1,
-      package: '@offgrid/llama.rn',
+      package: '@ogai/llama.rn',
       version: '0.13.0-b12032',
       llamaBuild: 12032,
       reactNative: '0.83.1',

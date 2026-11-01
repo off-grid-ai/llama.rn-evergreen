@@ -2,7 +2,7 @@ name: Nightly
 
 # Sync the vendored llama.cpp to its newest bNNNNN release, build the Android
 # libraries, the iOS xcframework and the Android engine packs, test, and
-# publish @offgrid/llama.rn as a GitHub Release. A broken step leaves the sync
+# publish @ogai/llama.rn as a GitHub Release. A broken step leaves the sync
 # branch pushed and opens (or updates) a PR that names the step.
 
 on:
@@ -393,8 +393,8 @@ jobs:
           npx --yes @react-native-community/cli@latest init EnginePackHost \
             --version "$ENGINE_PACK_REACT_NATIVE" --skip-git-init --install-pods false --pm npm
           cd EnginePackHost
-          npm install --ignore-scripts "$RUNNER_TEMP"/offgrid-llama.rn-*.tgz
-          PKG=node_modules/@offgrid/llama.rn
+          npm install --ignore-scripts "$RUNNER_TEMP"/ogai-llama.rn-*.tgz
+          PKG=node_modules/@ogai/llama.rn
           cp -R "$GITHUB_WORKSPACE/android/src/main/jniLibs" "$PKG/android/src/main/"
           cp -R "$GITHUB_WORKSPACE/bin" "$PKG/"
           cd android
@@ -613,7 +613,7 @@ jobs:
       - name: Create GitHub Release
         run: |
           gh release create "v$VERSION" \
-            offgrid-llama.rn-"$VERSION".tgz \
+            ogai-llama.rn-"$VERSION".tgz \
             llama-rn-android-jni-libs.tar.gz \
             llama-rn-ios-xcframework.tar.gz \
             artifacts/engine-packs/engine-pack-*.zip \
@@ -621,9 +621,9 @@ jobs:
             artifacts/engine-packs/manifest.json.sig \
             install/engine-signing-public-key.pem \
             --title "v$VERSION" \
-            --notes "@offgrid/llama.rn $VERSION on llama.cpp [$LLAMA_CPP](https://github.com/ggml-org/llama.cpp/releases/tag/$LLAMA_CPP).
+            --notes "@ogai/llama.rn $VERSION on llama.cpp [$LLAMA_CPP](https://github.com/ggml-org/llama.cpp/releases/tag/$LLAMA_CPP).
 
-          Install: \`npm install $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/releases/download/v$VERSION/offgrid-llama.rn-$VERSION.tgz\`"
+          Install: \`npm install $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/releases/download/v$VERSION/ogai-llama.rn-$VERSION.tgz\`"
         env:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ needs.sync.outputs.version }}
@@ -655,8 +655,8 @@ jobs:
             echo "NPM_TOKEN is not set; the tarball is on the GitHub Release only"
             exit 0
           fi
-          gh release download "v$VERSION" -R "$GITHUB_REPOSITORY" -p "offgrid-llama.rn-$VERSION.tgz"
-          npm publish "offgrid-llama.rn-$VERSION.tgz" --access public --provenance
+          gh release download "v$VERSION" -R "$GITHUB_REPOSITORY" -p "ogai-llama.rn-$VERSION.tgz"
+          npm publish "ogai-llama.rn-$VERSION.tgz" --access public --provenance
         env:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ needs.sync.outputs.version }}

@@ -1,4 +1,4 @@
-# llama.rn-evergreen (`@offgrid/llama.rn`)
+# llama.rn-evergreen (`@ogai/llama.rn`)
 
 [![Nightly](https://github.com/off-grid-ai/llama.rn-evergreen/actions/workflows/nightly.yml/badge.svg)](https://github.com/off-grid-ai/llama.rn-evergreen/actions/workflows/nightly.yml)
 [![llama.cpp](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fraw.githubusercontent.com%2Foff-grid-ai%2Fllama.rn-evergreen%2Fmain%2Fpackage.json&query=%24.offgrid.llamaCpp&label=llama.cpp)](https://github.com/ggml-org/llama.cpp/releases)
@@ -22,12 +22,12 @@ Each GitHub Release carries the npm tarball. Install it under the name `llama.rn
 ```json
 {
   "dependencies": {
-    "llama.rn": "https://github.com/off-grid-ai/llama.rn-evergreen/releases/download/v0.13.0-b12032/offgrid-llama.rn-0.13.0-b12032.tgz"
+    "llama.rn": "https://github.com/off-grid-ai/llama.rn-evergreen/releases/download/v0.13.0-b12032/ogai-llama.rn-0.13.0-b12032.tgz"
   }
 }
 ```
 
-Publishing to npm as `@offgrid/llama.rn` is coming.
+Publishing to npm as `@ogai/llama.rn` is coming.
 
 Versions are `<llama.rn version>-<llama.cpp tag>`, for example `0.13.0-b12032`. A `.N` suffix marks a rebuild on the same llama.cpp tag.
 
@@ -45,7 +45,7 @@ A pack is the full `librnllama*.so` set for one Android ABI: the core library an
 ```json
 {
   "schema": 1,
-  "package": "@offgrid/llama.rn",
+  "package": "@ogai/llama.rn",
   "version": "0.13.0-b12032",
   "llamaCpp": "b12032",
   "llamaBuild": 12032,
@@ -92,7 +92,7 @@ The hook picks the CPU variant as usual. It loads the variant's core and then it
 
 This is a fork of [mybigday/llama.rn](https://github.com/mybigday/llama.rn) by Jhen-Jie Hong and contributors, built on [ggml-org/llama.cpp](https://github.com/ggml-org/llama.cpp). Both are MIT licensed. LICENSE keeps llama.rn's MIT notice, and [NOTICE](NOTICE) lists the vendored licences.
 
-The upstream llama.rn documentation follows. Install `@offgrid/llama.rn` where it says `llama.rn`.
+The upstream llama.rn documentation follows. Install `@ogai/llama.rn` where it says `llama.rn`.
 
 ---
 

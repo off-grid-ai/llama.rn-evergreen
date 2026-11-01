@@ -1,7 +1,7 @@
-@offgrid/llama.rn
+@ogai/llama.rn
 
 A fork of llama.rn (https://github.com/mybigday/llama.rn), maintained by
-Off Grid AI at https://github.com/off-grid-ai/llama.rn.
+Off Grid AI at https://github.com/off-grid-ai/llama.rn-evergreen.
 
 llama.rn is Copyright (c) 2023 Jhen-Jie Hong and released under the MIT
 License; see LICENSE. The fork keeps that licence and notice unchanged.

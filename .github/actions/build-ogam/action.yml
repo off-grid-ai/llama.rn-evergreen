@@ -63,7 +63,7 @@ runs:
       run: |
         target=ogam-app/OGAM/node_modules/llama.rn
         rm -rf "$target" && mkdir -p "$target"
-        tar -xzf "$RUNNER_TEMP"/offgrid-llama.rn-*.tgz --strip-components=1 -C "$target"
+        tar -xzf "$RUNNER_TEMP"/ogai-llama.rn-*.tgz --strip-components=1 -C "$target"
         if [ "${{ inputs.platform }}" = android ]; then
           cp -R android/src/main/jniLibs "$target/android/src/main/"
           cp -R bin "$target/"

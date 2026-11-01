@@ -1,5 +1,5 @@
 {
-  "name": "@offgrid/llama.rn",
+  "name": "@ogai/llama.rn",
   "version": "0.13.0-b12032",
   "description": "llama.rn on the newest llama.cpp: nightly sync, prebuilt Android and iOS binaries, signed Android engine packs",
   "main": "lib/commonjs/index",
