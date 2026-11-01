@@ -19,6 +19,14 @@ public class RNLlama {
   private static final String TAG = "RNLlama";
   private static boolean libsLoaded = false;
 
+  // Engine pack: an app-private dir holding a verified, newer librnllama*.so set
+  // (core + JNI wrapper per variant, optional htp/). The app verifies and sets it
+  // before React Native starts; when unusable, the bundled libraries load.
+  private static File enginePackDir = null;
+  private static boolean useEnginePack = false;
+  private static String nativeLibrarySource = null;
+  private static String enginePackError = null;
+
   // HTP (Hexagon Tensor Processor) constants
   private static final int HTP_DIR_MODE = 0755;  // rwx for owner, rx for group/others
   private static final int HTP_FILE_MODE = 0755;
@@ -44,6 +52,43 @@ public class RNLlama {
 
   public RNLlama(ReactApplicationContext reactContext) {
     this.reactContext = reactContext;
+  }
+
+  /** Set before the first llama.rn install; null means bundled libraries. */
+  public static synchronized void setEnginePackDir(File dir) {
+    if (libsLoaded) {
+      Log.w(TAG, "setEnginePackDir called after native libraries loaded; ignored");
+      return;
+    }
+    enginePackDir = dir;
+  }
+
+  /** "pack", "bundled", or null before the native libraries load. */
+  public static synchronized String getNativeLibrarySource() {
+    return nativeLibrarySource;
+  }
+
+  /** Why the engine pack was not used, or null. */
+  public static synchronized String getEnginePackError() {
+    return enginePackError;
+  }
+
+  private static File enginePackFile(String libraryName) {
+    return new File(enginePackDir, "lib" + libraryName + ".so");
+  }
+
+  // The JNI wrapper links its core by soname: rnllama_jni_<v> -> rnllama_<v>.
+  private static String coreLibraryName(String jniLibraryName) {
+    return jniLibraryName.replaceFirst("^rnllama_jni", "rnllama");
+  }
+
+  private static File enginePackHtpDir() {
+    if (!useEnginePack) return null;
+    File htpDir = new File(enginePackDir, "htp");
+    for (String libName : HTP_LIBS) {
+      if (!new File(htpDir, libName).isFile()) return null;
+    }
+    return htpDir;
   }
 
   // HTP library extraction and setup
@@ -148,7 +193,8 @@ public class RNLlama {
   }
 
   private static void extractHtpLibrariesFromAssets(android.content.Context context) {
-    File htpDir = resolveHtpDirectory(context);
+    File packHtpDir = enginePackHtpDir();
+    File htpDir = packHtpDir != null ? packHtpDir : resolveHtpDirectory(context);
     if (htpDir == null) {
       Log.w(NAME, "Could not resolve HTP directory; Hexagon backend will be disabled");
       return;
@@ -156,7 +202,7 @@ public class RNLlama {
 
     Log.d(NAME, "Using " + htpDir.getAbsolutePath() + " for HTP libraries");
 
-    if (!ensureHtpLibraries(context, htpDir)) {
+    if (packHtpDir == null && !ensureHtpLibraries(context, htpDir)) {
       Log.w(NAME, "Could not install Hexagon libraries; Hexagon backend will be disabled");
       return;
     }
@@ -179,6 +225,24 @@ public class RNLlama {
       return false;
     }
 
+    useEnginePack = enginePackDir != null;
+    if (useEnginePack && !enginePackFile("rnllama").isFile()) {
+      enginePackError = "Engine pack is missing librnllama.so: " + enginePackDir;
+      Log.w(TAG, enginePackError);
+      useEnginePack = false;
+    }
+
+    if (loadNativeLibraries(context)) return true;
+    if (!useEnginePack) return false;
+
+    // Best effort: libraries the pack already loaded stay in the process.
+    enginePackError = "Engine pack failed to load; using bundled libraries";
+    Log.w(TAG, enginePackError);
+    useEnginePack = false;
+    return loadNativeLibraries(context);
+  }
+
+  private static boolean loadNativeLibraries(ReactApplicationContext context) {
     // Extract HTP libraries from assets before loading native library
     try {
       extractHtpLibrariesFromAssets(context);
@@ -253,13 +317,14 @@ public class RNLlama {
 
       if (!jniLoaded) {
         // Fallback to generic JNI
-        System.loadLibrary("rnllama_jni");
+        loadLibrary("rnllama_jni");
         loadedLib = "rnllama_jni";
       }
 
-      System.loadLibrary("rnllama");
+      loadLibrary("rnllama");
       nativeSetLoadedLibrary(loadedLib);
       libsLoaded = true;
+      nativeLibrarySource = useEnginePack ? "pack" : "bundled";
       return true;
     } catch (UnsatisfiedLinkError e) {
       Log.e(TAG, "Failed to load native libraries", e);
@@ -303,11 +368,32 @@ public class RNLlama {
 
   private static boolean tryLoadLibrary(String libraryName) {
     try {
-      System.loadLibrary(libraryName);
+      loadLibrary(libraryName);
       return true;
     } catch (UnsatisfiedLinkError ignored) {
       return false;
     }
+  }
+
+  // From the engine pack, load the core before its JNI wrapper so the wrapper's
+  // soname dependency resolves to the pack's core, never the bundled one.
+  private static void loadLibrary(String libraryName) {
+    if (!useEnginePack) {
+      System.loadLibrary(libraryName);
+      return;
+    }
+    File wrapper = enginePackFile(libraryName);
+    if (!wrapper.isFile()) {
+      throw new UnsatisfiedLinkError("Engine pack has no " + wrapper.getName());
+    }
+    if (libraryName.startsWith("rnllama_jni")) {
+      File core = enginePackFile(coreLibraryName(libraryName));
+      if (!core.isFile()) {
+        throw new UnsatisfiedLinkError("Engine pack has no " + core.getName());
+      }
+      System.load(core.getAbsolutePath());
+    }
+    System.load(wrapper.getAbsolutePath());
   }
 
   private static String lowerOrEmpty(String value) {
