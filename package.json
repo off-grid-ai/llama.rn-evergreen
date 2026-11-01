@@ -1,7 +1,7 @@
 {
-  "name": "llama.rn",
+  "name": "@offgrid/llama.rn",
   "version": "0.13.0-rc.9",
-  "description": "React Native binding of llama.cpp",
+  "description": "llama.rn on the newest llama.cpp: nightly sync, prebuilt Android and iOS binaries, signed Android engine packs",
   "main": "lib/commonjs/index",
   "module": "lib/module/index",
   "types": "lib/typescript/index.d.ts",
@@ -11,6 +11,7 @@
     "bin",
     "install/download-native-artifacts.js",
     "install/native-artifacts.json",
+    "install/engine-signing-public-key.pem",
     "src",
     "lib",
     "jest",
@@ -37,7 +38,8 @@
     "!**/__tests__",
     "!**/__fixtures__",
     "!**/__mocks__",
-    "!**/.*"
+    "!**/.*",
+    "NOTICE"
   ],
   "scripts": {
     "bootstrap": "./scripts/bootstrap.sh",
@@ -69,18 +71,19 @@
     "llama",
     "llama-2"
   ],
-  "repository": "https://github.com/mybigday/llama.rn",
+  "repository": "https://github.com/off-grid-ai/llama.rn-evergreen",
   "bin": {
     "llama-rn-download-artifacts": "./install/download-native-artifacts.js"
   },
   "author": "Jhen-Jie Hong <developer@jhen.me> (https://github.com/mybigday)",
   "license": "MIT",
   "bugs": {
-    "url": "https://github.com/mybigday/llama.rn/issues"
+    "url": "https://github.com/off-grid-ai/llama.rn-evergreen/issues"
   },
-  "homepage": "https://github.com/mybigday/llama.rn#readme",
+  "homepage": "https://github.com/off-grid-ai/llama.rn-evergreen#readme",
   "publishConfig": {
-    "registry": "https://registry.npmjs.org/"
+    "registry": "https://registry.npmjs.org/",
+    "access": "public"
   },
   "devDependencies": {
     "@commitlint/config-conventional": "^17.0.2",
@@ -271,5 +274,8 @@
     "name": "RNLlamaSpec",
     "type": "modules",
     "jsSrcsDir": "src"
+  },
+  "offgrid": {
+    "llamaCpp": "b12032"
   }
 }

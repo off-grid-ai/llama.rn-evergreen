@@ -1,8 +1,101 @@
-# llama.rn
+# llama.rn-evergreen (`@offgrid/llama.rn`)
 
-[![Actions Status](https://github.com/mybigday/llama.rn/workflows/CI/badge.svg)](https://github.com/mybigday/llama.rn/actions)
-[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](https://opensource.org/licenses/MIT)
-[![npm](https://img.shields.io/npm/v/llama.rn.svg)](https://www.npmjs.com/package/llama.rn/)
+[![Nightly](https://github.com/off-grid-ai/llama.rn-evergreen/actions/workflows/nightly.yml/badge.svg)](https://github.com/off-grid-ai/llama.rn-evergreen/actions/workflows/nightly.yml)
+[![llama.cpp](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fraw.githubusercontent.com%2Foff-grid-ai%2Fllama.rn-evergreen%2Fmain%2Fpackage.json&query=%24.offgrid.llamaCpp&label=llama.cpp)](https://github.com/ggml-org/llama.cpp/releases)
+[![npm](https://img.shields.io/npm/v/@offgrid/llama.rn.svg)](https://www.npmjs.com/package/@offgrid/llama.rn)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+
+[llama.rn](https://github.com/mybigday/llama.rn) on the newest [llama.cpp](https://github.com/ggml-org/llama.cpp), rebuilt every night.
+Off Grid AI maintains it for its mobile app. The API is the same as llama.rn.
+
+## How it differs from llama.rn
+
+- **Newest llama.cpp.** A nightly workflow syncs to the newest llama.cpp `bNNNNN` release, then builds, tests and publishes. The badge above shows the current tag. A new model architecture (for example LFM3) works the day llama.cpp ships it.
+- **Prebuilt binaries.** Each release hosts the Android `.so` variants and the iOS `rnllama.xcframework`. `postinstall` downloads them and checks their SHA-256. You do not build native code.
+- **Signed Android engine packs.** Each release also has a pack per Android ABI. Your app can download a newer engine without an app update. See [Android engine packs](#android-engine-packs). iOS cannot load downloaded code, so iOS gets new engines through app releases.
+- **Every step is tested.** Vendor sync, Android build, iOS build, C++ tests, Jest, the TypeScript build and the engine-pack build all run each night. A broken step opens a PR that names it. Fixes that are not Off Grid specific go upstream to llama.rn.
+
+## Install
+
+```sh
+npm install @offgrid/llama.rn
+```
+
+To keep `import ... from 'llama.rn'` unchanged, install it under the old name:
+
+```json
+{ "dependencies": { "llama.rn": "npm:@offgrid/llama.rn@0.13.0-b12032" } }
+```
+
+Each GitHub Release also carries the npm tarball:
+
+```sh
+npm install https://github.com/off-grid-ai/llama.rn-evergreen/releases/download/v<version>/offgrid-llama.rn-<version>.tgz
+```
+
+Versions are `<llama.rn version>-<llama.cpp tag>`, for example `0.13.0-b12032`. A `.N` suffix marks a rebuild on the same llama.cpp tag.
+
+## Android engine packs
+
+A pack is the full `librnllama*.so` set for one Android ABI: the core library and the JNI wrapper of every CPU variant, plus the Hexagon HTP libraries under `htp/` (arm64-v8a only). The JNI wrapper is compiled against llama.cpp headers and React Native, so a pack only fits an app built on the same React Native version and the same Java/JS bridge.
+
+**Where.** Each GitHub Release carries `engine-pack-<abi>.zip`, `manifest.json`, `manifest.json.sig` and `engine-signing-public-key.pem`. Hosting on Cloudflare R2 is coming: `https://mobile-runtime.getoffgridai.co/android/manifest.json` (newest) and `https://mobile-runtime.getoffgridai.co/android/<version>/…` (immutable). Until then the manifest's `url`s point at the GitHub Release.
+
+**manifest.json** (schema 1):
+
+```json
+{
+  "schema": 1,
+  "package": "@offgrid/llama.rn",
+  "version": "0.13.0-b12032",
+  "llamaCpp": "b12032",
+  "llamaBuild": 12032,
+  "bridge": "<sha256 hex>",
+  "reactNative": "0.83.1",
+  "createdAt": "2026-11-01T00:00:00.000Z",
+  "packs": [
+    {
+      "abi": "arm64-v8a",
+      "url": "https://…/engine-pack-arm64-v8a.zip",
+      "sha256": "<sha256 hex of the zip>",
+      "size": 12345678,
+      "files": [
+        { "path": "librnllama_v8_2_dotprod_i8mm.so", "sha256": "<hex>", "size": 123 },
+        { "path": "librnllama_jni_v8_2_dotprod_i8mm.so", "sha256": "<hex>", "size": 123 },
+        { "path": "htp/libggml-htp-v73.so", "sha256": "<hex>", "size": 123 }
+      ]
+    }
+  ]
+}
+```
+
+- `manifest.json.sig` is the base64 raw Ed25519 signature over the exact bytes of `manifest.json`.
+- Public key (Ed25519, raw 32 bytes, base64): `c4nGAstb9RSHmeFnP8n+4kEoR85a2V01N34jQKzl/iQ=`. The PEM is `install/engine-signing-public-key.pem` in the package.
+- `bridge` is a hash of the contract the APK bakes in: the Java sources and the JS sources (`src/`, without tests and `src/version.ts`). The package's own value is in its `package.json` as `offgrid.engineBridge`.
+- `reactNative` is the exact React Native version the JNI wrappers were built against.
+
+**Accept a pack only if** the signature verifies with the pinned key, `package` matches, `bridge` equals your installed package's `offgrid.engineBridge`, `reactNative` equals your app's version exactly, and `version` is newer than what runs. Then check the zip's SHA-256. Extract to a staging directory and reject any extra file, missing file, path with `..`, or file whose SHA-256 differs from `files`. Move the directory atomically into app-private storage.
+
+**Loader hook** (Java, `com.rnllama.RNLlama`):
+
+```java
+// Application.onCreate, before React Native starts. null = bundled libraries.
+RNLlama.setEnginePackDir(new File(getFilesDir(), "llama-engines/0.13.0-b12032/arm64-v8a"));
+
+// After llama.rn initialises:
+RNLlama.getNativeLibrarySource(); // "pack", "bundled", or null if not loaded
+RNLlama.getEnginePackError();     // null, or why the pack was not used
+```
+
+The hook picks the CPU variant as usual. It loads the variant's core and then its JNI wrapper from the pack with `System.load`, so the wrapper links to the pack's core. If the pack has no `librnllama.so`, the bundled libraries load. If a pack library fails to load, the hook records the error and loads the bundled libraries for this launch. Your app should then drop that pack. If `htp/` holds the HTP libraries, the Hexagon backend uses them.
+
+## Credits
+
+This is a fork of [mybigday/llama.rn](https://github.com/mybigday/llama.rn) by Jhen-Jie Hong and contributors, built on [ggml-org/llama.cpp](https://github.com/ggml-org/llama.cpp). Both are MIT licensed. LICENSE keeps llama.rn's MIT notice, and [NOTICE](NOTICE) lists the vendored licences.
+
+The upstream llama.rn documentation follows. Install `@offgrid/llama.rn` where it says `llama.rn`.
+
+---
 
 React Native binding of [llama.cpp](https://github.com/ggerganov/llama.cpp) - LLM inference in C/C++
 

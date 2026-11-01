@@ -28,7 +28,7 @@ Pod::Spec.new do |s|
   s.authors      = package["author"]
 
   s.platforms    = { :ios => "13.0", :tvos => "13.0" }
-  s.source       = { :git => "https://github.com/mybigday/llama.rn.git", :tag => "#{s.version}" }
+  s.source       = { :git => "https://github.com/off-grid-ai/llama.rn-evergreen.git", :tag => "v#{s.version}" }
 
   header_search_paths = ['$(inherited)']
 

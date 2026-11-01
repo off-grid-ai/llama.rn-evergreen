@@ -1,0 +1,27 @@
+@offgrid/llama.rn
+
+A fork of llama.rn (https://github.com/mybigday/llama.rn), maintained by
+Off Grid AI at https://github.com/off-grid-ai/llama.rn.
+
+llama.rn is Copyright (c) 2023 Jhen-Jie Hong and released under the MIT
+License; see LICENSE. The fork keeps that licence and notice unchanged.
+
+This package and its prebuilt binaries (Android .so libraries, the iOS
+xcframework and the Android engine packs) include third-party code under
+the following licences. Each licence text ships next to the code it covers.
+
+| Component | Location | Licence |
+| --- | --- | --- |
+| llama.cpp / ggml | vendor/llama.cpp | MIT (vendor/llama.cpp/LICENSE) |
+| codec.cpp | vendor/codec.cpp | MIT (vendor/codec.cpp/LICENSE) |
+| OpenCL-Headers | vendor/OpenCL-Headers | Apache-2.0 (vendor/OpenCL-Headers/LICENSE) |
+| OpenCL-ICD-Loader | vendor/OpenCL-ICD-Loader | Apache-2.0 (vendor/OpenCL-ICD-Loader/LICENSE) |
+| cpp-httplib | vendor/llama.cpp/vendor/cpp-httplib | MIT (LICENSE in that directory) |
+| nlohmann/json | vendor/llama.cpp/vendor/nlohmann | MIT (header notice) |
+| PicoSHA2 | vendor/llama.cpp/vendor/hash | MIT (header notice) |
+| miniaudio | vendor/llama.cpp/vendor/miniaudio | Public domain or MIT-0 (header notice) |
+| stb | vendor/llama.cpp/vendor/stb | Public domain or MIT (header notice) |
+| subprocess.h | vendor/llama.cpp/vendor/sheredom | Unlicense (header notice) |
+
+The Android Hexagon (HTP) libraries are built from ggml's Hexagon backend
+with the Qualcomm Hexagon SDK.
