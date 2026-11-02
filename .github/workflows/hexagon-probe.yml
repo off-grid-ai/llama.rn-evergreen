@@ -1,0 +1,62 @@
+name: Hexagon probe
+
+# Builds upstream llama.cpp for Android + Hexagon with upstream's own Snapdragon
+# preset and toolchain image, so a Hexagon regression can be bisected on a real
+# phone (test-backend-ops -b HTP0, llama-cli) without the app in the way.
+
+on:
+  workflow_dispatch:
+    inputs:
+      refs:
+        description: 'JSON list of "<ref>[ revert <commit>...]" variants'
+        required: true
+        default: '["b12032"]'
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    container:
+      image: ghcr.io/snapdragon-toolchain/arm64-android:v0.8
+    strategy:
+      fail-fast: false
+      matrix:
+        variant: ${{ fromJSON(inputs.refs) }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Check out llama.cpp
+        run: |
+          set -- ${{ matrix.variant }}
+          git clone --filter=blob:none https://github.com/ggml-org/llama.cpp src
+          cd src
+          git checkout -q "$1"
+          shift
+          if [ "${1:-}" = revert ]; then
+            shift
+            git -c user.email=ci@local -c user.name=ci revert --no-edit "$@"
+          fi
+          git log --oneline -3
+
+      - name: Build
+        run: |
+          cd src
+          cp docs/backend/snapdragon/CMakeUserPresets.json .
+          cmake --preset arm64-android-snapdragon-release -B build
+          cmake --build build -j "$(nproc)"
+          cmake --install build --prefix ../pkg
+          cp build/bin/test-backend-ops ../pkg/bin/ 2>/dev/null || true
+
+      - name: Name the artifact
+        id: name
+        run: echo "name=hexagon-probe-$(echo '${{ matrix.variant }}' | tr -c 'A-Za-z0-9.' '-')" >> "$GITHUB_OUTPUT"
+
+      - name: Upload
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.name.outputs.name }}
+          path: pkg
+          retention-days: 7
