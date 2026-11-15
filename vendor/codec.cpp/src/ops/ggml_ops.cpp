@@ -971,3 +971,16 @@ ggml_tensor * codec_op_espnet_rel_pos_emb(
     ggml_tensor * permuted = ggml_cont(ctx, ggml_permute(ctx, stacked, 1, 0, 2, 3));
     return ggml_reshape_2d(ctx, permuted, d_model, pe_len);
 }
+
+ggml_tensor * codec_diag_mask_inf(ggml_context * ctx, ggml_tensor * scores, int n_past) {
+    const int64_t n_kv = scores->ne[0];
+    const int64_t n_q  = scores->ne[1];
+    // Rows are absolute query positions 0..n_past+n_q-1; UPPER keeps col > row, so
+    // after filling with -inf the kept cells are exactly the future keys.
+    ggml_tensor * mask = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, n_kv, n_past + n_q);
+    mask = ggml_tri(ctx, ggml_fill(ctx, mask, -INFINITY), GGML_TRI_TYPE_UPPER);
+    if (n_past > 0) {
+        mask = ggml_cont(ctx, ggml_view_2d(ctx, mask, n_kv, n_q, mask->nb[1], (size_t) n_past * mask->nb[1]));
+    }
+    return ggml_add(ctx, scores, mask);
+}

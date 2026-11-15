@@ -1,0 +1,11 @@
+--- a/src/lm/residual_depth_ar.cpp
++++ b/src/lm/residual_depth_ar.cpp
+@@ -628,7 +628,7 @@
+     // masks scores[k_idx, q_idx, h] for k_idx > q_idx + n_past, exactly
+     // matching when n_past = kv_pos_start.  For T_new=1 the mask is a
+     // no-op (k_all length = kv_pos_start+1, all positions visible).
+-    scores = ggml_diag_mask_inf(ctx, scores, kv_pos_start);
++    scores = codec_diag_mask_inf(ctx, scores, kv_pos_start);
+     scores = ggml_soft_max(ctx, scores);
+ 
+     ggml_tensor * v_p = ggml_cont(ctx, ggml_permute(ctx, v_all, 1, 2, 0, 3));

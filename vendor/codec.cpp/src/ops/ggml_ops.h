@@ -250,4 +250,8 @@ ggml_tensor * codec_op_espnet_rel_pos_emb(
     int32_t t,
     int32_t d_model);
 
+// Causal mask for attention scores [n_kv, n_q, ...]: key k is masked (-inf) for
+// query q when k > q + n_past. Replaces ggml_diag_mask_inf, which ggml v1 removed.
+ggml_tensor * codec_diag_mask_inf(ggml_context * ctx, ggml_tensor * scores, int n_past);
+
 #endif
