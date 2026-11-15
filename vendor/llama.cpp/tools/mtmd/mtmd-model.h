@@ -1174,9 +1174,6 @@ struct mtmd_model {
     // predefined voices, no rows if the voice is named in the prompt (lfm3a)
     std::map<std::string, mtmd_gen_voice> gen_voices;
 
-    // predefined voices, no rows if the voice is named in the prompt (lfm3a)
-    std::map<std::string, std::vector<float>> gen_voices;
-
     // soprano: Vocos decoder, hidden states -> STFT coefficients
     mtmd_vocos vocos;
 
