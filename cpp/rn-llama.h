@@ -30,6 +30,13 @@ namespace rnllama {
 inline common_json to_common_json(const json & j) { return common_json::parse(j.dump()); }
 inline json from_common_json(const common_json & j) { return json::parse(j.dump()); }
 
+// Message of the exception currently being handled; call only from inside a
+// catch handler. The rethrow is matched in this library's image, so callers
+// in another image (the JSI glue linked into the app on iOS) get the what()
+// of a std::exception even when their own catch (const std::exception &)
+// misses it. Anything else is reported by its demangled type name.
+std::string current_exception_message();
+
 // Display form of a raw token piece: a lone high-bit byte is hex-escaped,
 // any other ill-formed piece is sanitized (JSI strings require well-formed UTF-8)
 std::string token_piece_to_output_string(const std::string & piece);
@@ -117,9 +124,22 @@ struct llama_rn_context {
     float loading_progress = 0;
     bool is_load_interrupted = false;
     common_params params;
+    // Sampler order at load: the GGUF's general.sampling.sequence, else
+    // llama.cpp's default.  A completion without `samplers` uses it.
+    std::vector<common_sampler_type> default_samplers;
     // n_probs readout mode for the next completion (see get_token_probabilities);
     // false = softmax of the raw logits, true = the sampler chain's candidates
     bool post_sampling_probs = true;
+    // Completion params common_params has no field for (parseCompletionParams).
+    // n_min_predict: steps before the generation may end (-1 = none; for TTS,
+    // the model's own minimum).  tts_speaker_id / tts_voice: the TTS voice, a
+    // registry speaker id (-1 = none) or a builtin voice name ("" = the
+    // model's default).
+    int32_t n_min_predict = -1;
+    int tts_speaker_id = -1;
+    std::string tts_voice;
+    // End-of-generation tokens of the vocabulary, which n_min_predict holds back.
+    std::vector<llama_token> eog_tokens;
     common_init_result_ptr llama_init;
     llama_context *ctx = nullptr;
     common_chat_templates_ptr templates;
@@ -216,9 +236,14 @@ struct llama_rn_context {
     // TTS fields and methods (delegated to TTS context)
     llama_rn_context_tts *tts_wrapper = nullptr;
     bool has_vocoder = false;
-    bool initVocoder(const std::string &vocoder_model_path, int batch_size = -1, bool use_gpu = false);
+    bool initVocoder(const std::string &vocoder_model_path, int batch_size = -1, bool use_gpu = false,
+                     const std::vector<std::string> &kv_overrides = {});
     bool isVocoderEnabled() const;
     void releaseVocoder();
+
+    // n_min_predict: sets the logits at batch index `idx` of every
+    // end-of-generation token to -inf.
+    void holdBackEndOfGeneration(int idx) const;
 
     // Cache management
     void clearCache(bool clear_data = false);
@@ -265,9 +290,16 @@ struct gguf_file_info {
     size_t alignment = 0;
     size_t data_offset = 0;
     std::vector<std::pair<std::string, std::string>> kv;
+    // Element counts for the array-valued keys named in read_gguf_file_info's
+    // `skip`. Those keys are absent from `kv`, so this is all a caller gets of
+    // them -- and for a tokenizer array the count is the useful part anyway.
+    std::vector<std::pair<std::string, size_t>> arr_lengths;
 };
 // Reads GGUF header metadata (no tensor data). Returns false if the file cannot be parsed.
-bool read_gguf_file_info(const std::string & path, gguf_file_info & info);
+// Keys in `skip` are not stringified into `kv`; an array among them contributes
+// its length to `arr_lengths` instead.
+bool read_gguf_file_info(const std::string & path, gguf_file_info & info,
+                         const std::vector<std::string> & skip = {});
 
 // Logging functions
 void log(const char *level, const char *function, int line, const char *format, ...);

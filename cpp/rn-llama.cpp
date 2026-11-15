@@ -9,18 +9,47 @@
 // Include multimodal support
 #include "tools/mtmd/mtmd.h"
 #include "tools/mtmd/mtmd-helper.h"
-#include "tools/mtmd/clip.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cstdarg>
 #include <cstdio>
+#include <cstdlib>
+#if !defined(_MSC_VER)
+#include <cxxabi.h>
+#endif
 #include <fstream>
+#include <typeinfo>
 
 #if defined(__ANDROID__)
 #include <android/set_abort_message.h>
 #endif
 
 namespace rnllama {
+
+std::string current_exception_message() {
+    try {
+        throw;
+    } catch (const std::exception & e) {
+        return e.what();
+    } catch (...) {
+#if defined(_MSC_VER)
+        // MSVC / clang-cl: no Itanium C++ ABI (<cxxabi.h>) to query the type.
+        return "Unknown error";
+#else
+        // Objective-C exceptions land here too; their type name is the class name.
+        const std::type_info * type = abi::__cxa_current_exception_type();
+        if (type == nullptr) {
+            return "Unknown error";
+        }
+        int status = 0;
+        char * demangled = abi::__cxa_demangle(type->name(), nullptr, nullptr, &status);
+        std::string name = (status == 0 && demangled != nullptr) ? demangled : type->name();
+        std::free(demangled);
+        return "Unknown error (exception type: " + name + ")";
+#endif
+    }
+}
 
 namespace {
 
@@ -86,7 +115,8 @@ ggml_backend_buffer_type_t backend_cpu_buffer_type() {
     return ggml_backend_cpu_buffer_type();
 }
 
-bool read_gguf_file_info(const std::string & path, gguf_file_info & info) {
+bool read_gguf_file_info(const std::string & path, gguf_file_info & info,
+                         const std::vector<std::string> & skip) {
     struct gguf_init_params params = {
         /*.no_alloc = */ false,
         /*.ctx      = */ NULL,
@@ -101,8 +131,20 @@ bool read_gguf_file_info(const std::string & path, gguf_file_info & info) {
     const int n_kv = gguf_get_n_kv(ctx);
     info.kv.clear();
     info.kv.reserve(n_kv);
+    info.arr_lengths.clear();
     for (int i = 0; i < n_kv; ++i) {
-        info.kv.emplace_back(gguf_get_key(ctx, i), gguf_kv_to_str(ctx, i));
+        const char * key = gguf_get_key(ctx, i);
+        // gguf_kv_to_str flattens a whole array into one string, with no length
+        // bound by default. For a tokenizer that is megabytes of std::string
+        // built here and dropped by the caller, which only ever wanted to know
+        // how many entries there were. Record the count and skip the text.
+        if (std::find(skip.begin(), skip.end(), key) != skip.end()) {
+            if (gguf_get_kv_type(ctx, i) == GGUF_TYPE_ARRAY) {
+                info.arr_lengths.emplace_back(key, gguf_get_arr_n(ctx, i));
+            }
+            continue;
+        }
+        info.kv.emplace_back(key, gguf_kv_to_str(ctx, i));
     }
     gguf_free(ctx);
     return true;
@@ -570,6 +612,14 @@ bool llama_rn_context::loadModel(common_params &params_)
         }
         return false;
     }
+    default_samplers = params.sampling.samplers;
+    {
+        const llama_vocab * vocab = llama_model_get_vocab(model);
+        eog_tokens.clear();
+        for (llama_token t = 0; t < llama_vocab_n_tokens(vocab); ++t) {
+            if (llama_vocab_is_eog(vocab, t)) eog_tokens.push_back(t);
+        }
+    }
 
     // Load the draft model for embedded MTP drafts and for classic standalone draft models
     // (draft-simple) alike. Gating this on MTP alone silently disabled speculation for
@@ -710,7 +760,7 @@ llama_context * llama_rn_context::createMTPDraftContext(const common_params &par
         return nullptr;
     }
 
-    auto cparams = common_context_params_to_llama(params_for_context);
+    auto cparams = common_context_params_to_llama(common_base_params_to_speculative(params_for_context));
 
     // An embedded MTP draft lives on an MTP-type context tied to the target context
     // (ctx_other) and uses rollback sequences; a classic standalone draft model
@@ -721,8 +771,6 @@ llama_context * llama_rn_context::createMTPDraftContext(const common_params &par
         cparams.n_rs_seq = 0;
         cparams.ctx_other = ctx;
     }
-    cparams.type_k = params_for_context.speculative.draft.cache_type_k;
-    cparams.type_v = params_for_context.speculative.draft.cache_type_v;
 
     return llama_init_from_model(model_dft, cparams);
 }
@@ -888,6 +936,12 @@ bool llama_rn_context::initMultimodal(const std::string &mmproj_path, bool use_g
     }
 }
 
+void llama_rn_context::holdBackEndOfGeneration(int idx) const {
+    float * logits = llama_get_logits_ith(ctx, idx);
+    if (logits == nullptr) return;
+    for (llama_token t : eog_tokens) logits[t] = -INFINITY;
+}
+
 bool llama_rn_context::isMultimodalEnabled() const {
     return mtmd_wrapper != nullptr && mtmd_wrapper->isEnabled(has_multimodal);
 }
@@ -921,13 +975,21 @@ void llama_rn_context::setMediaHashes(const std::vector<std::string> &hashes) {
     }
 }
 
-bool llama_rn_context::initVocoder(const std::string &vocoder_model_path, int batch_size, bool use_gpu) {
+bool llama_rn_context::initVocoder(const std::string &vocoder_model_path, int batch_size, bool use_gpu,
+                                   const std::vector<std::string> &kv_overrides) {
+    (void) batch_size;   // codec.cpp sizes its own decode
     try {
-        tts_wrapper = new llama_rn_context_tts(vocoder_model_path, batch_size, use_gpu);
+        // One vocoder per context: releaseVocoder() before loading another.
+        if (tts_wrapper != nullptr) throw std::runtime_error("a vocoder is already loaded; call releaseVocoder() first");
+        std::unique_ptr<llama_rn_context_tts> next(new llama_rn_context_tts(
+            vocoder_model_path, params.model.path, use_gpu, kv_overrides, params.cpuparams.n_threads));
+        const std::string why = next->checkBackbone(this);
+        if (!why.empty()) throw std::runtime_error(why);
+        tts_wrapper = next.release();
         has_vocoder = true;
         return true;
     } catch (const std::exception& e) {
-        has_vocoder = false;
+        LOG_ERROR("initVocoder: %s", e.what());
         return false;
     }
 }

@@ -246,7 +246,8 @@ bool test_completion() {
 // Shared helper: run one classic (non-parallel) completion of up to `max_tokens`
 // tokens through the same rewind -> loadPrompt -> beginCompletion -> doCompletion
 // -> endCompletion sequence the JSI completion() binding uses.
-static int run_classic_completion(llama_rn_context& ctx, const std::string& prompt, int max_tokens) {
+static int run_classic_completion(llama_rn_context& ctx, const std::string& prompt, int max_tokens,
+                                  std::vector<llama_token>* tokens = nullptr) {
     std::vector<std::string> empty_media;
     ctx.completion->rewind();
     if (!ctx.completion->initSampling()) {
@@ -260,6 +261,7 @@ static int run_classic_completion(llama_rn_context& ctx, const std::string& prom
     while (ctx.completion->has_next_token && generated < max_tokens) {
         completion_token_output out = ctx.completion->doCompletion();
         if (out.tok == -1) break;
+        if (tokens) tokens->push_back(out.tok);
         generated++;
     }
     ctx.completion->is_interrupted = true;
@@ -445,6 +447,33 @@ bool test_logit_bias_forces_token() {
     }
 }
 
+// n_min_predict holds the end of generation back for its first n tokens.
+bool test_n_min_predict_holds_back_eos() {
+    try {
+        llama_rn_context ctx;
+        if (!setup_completion_context(ctx)) return false;
+
+        const llama_token eos = llama_vocab_eos(llama_model_get_vocab(ctx.model));
+        ctx.params.sampling.logit_bias.clear();
+        ctx.params.sampling.logit_bias.push_back({ eos, 1000.0f });
+
+        ctx.n_min_predict = -1;
+        const int without = run_classic_completion(ctx, "Hello", 20);
+        ctx.n_min_predict = 5;
+        const int with = run_classic_completion(ctx, "Hello", 20);
+        ctx.n_min_predict = -1;
+        ctx.params.sampling.logit_bias.clear();
+        if (without != 0 || with != 5) {
+            std::cout << "Expected 0 and 5 tokens, got " << without << " and " << with << std::endl;
+            return false;
+        }
+        return true;
+    } catch (const std::exception& e) {
+        std::cout << "Exception: " << e.what() << std::endl;
+        return false;
+    }
+}
+
 // Test that partial init failures return false instead of dereferencing a null context.
 bool test_context_init_failure_is_graceful() {
     try {
@@ -605,6 +634,84 @@ bool test_draft_simple_rejects_hybrid() {
     }
 }
 
+// A speculative completion whose draft context can't be created fails before the
+// prompt is decoded. On a fresh context the KV cache stays empty, so the next
+// completion must not take the never-decoded prompt as a cached prefix.
+bool test_draft_init_failure_keeps_cache_consistent() {
+    try {
+        const std::string prompt = "The quick brown fox jumps over the lazy dog. Once upon a time";
+
+        llama_rn_context ref;
+        if (!setup_completion_context(ref)) return false;
+        ref.params.sampling.temp = 0.0f;
+        std::vector<llama_token> expected;
+        run_classic_completion(ref, prompt, 8, &expected);
+
+        llama_rn_context ctx;
+        if (!setup_draft_simple_context(ctx, "../tiny-random-llama.gguf")) return false;
+        ctx.params.sampling.temp = 0.0f;
+        // A quantized V cache needs flash attention, so the draft context init fails
+        ctx.params.flash_attn_type = LLAMA_FLASH_ATTN_TYPE_DISABLED;
+        ctx.params.speculative.draft.cache_type_v = GGML_TYPE_Q8_0;
+        try {
+            run_classic_completion(ctx, prompt, 8);
+            std::cout << "Expected the draft context init to fail" << std::endl;
+            return false;
+        } catch (const std::exception& e) {
+            if (std::string(e.what()) != "failed to create draft context") {
+                std::cout << "Unexpected exception: " << e.what() << std::endl;
+                return false;
+            }
+            // As the JSI completion task does on a throw
+            ctx.completion->endCompletion();
+        }
+
+        ctx.params.speculative.types = { COMMON_SPECULATIVE_TYPE_NONE };
+        std::vector<llama_token> got;
+        run_classic_completion(ctx, prompt, 8, &got);
+        return !expected.empty() && got == expected;
+    } catch (const std::exception& e) {
+        std::cout << "Exception: " << e.what() << std::endl;
+        return false;
+    }
+}
+
+// bench() right after a completion: the warm-up decodes from position 0, so the
+// chat cache has to go first, together with the completion's record of it.
+bool test_bench_after_completion() {
+    try {
+        const std::string turn1 = "The quick brown fox jumps over the lazy dog. ";
+        const std::string turn2 = turn1 + "Then it ran into the forest and";
+
+        llama_rn_context ref;
+        if (!setup_completion_context(ref)) return false;
+        ref.params.sampling.temp = 0.0f;
+        std::vector<llama_token> expected;
+        run_classic_completion(ref, turn2, 8, &expected);
+
+        llama_rn_context ctx;
+        if (!setup_completion_context(ctx)) return false;
+        ctx.params.sampling.temp = 0.0f;
+        // Also leaves is_interrupted set, as a stopped completion does.
+        run_classic_completion(ctx, turn1, 8);
+
+        const json result = ctx.completion->bench(32, 8, 1, 1);
+        if (result.empty() || result["speed_pp"].get<double>() <= 0.0 ||
+            result["speed_tg"].get<double>() <= 0.0) {
+            std::cout << "bench: " << result.dump() << std::endl;
+            return false;
+        }
+
+        // The next turn must not reuse the prefix the bench discarded.
+        std::vector<llama_token> got;
+        run_classic_completion(ctx, turn2, 8, &got);
+        return !expected.empty() && got == expected;
+    } catch (const std::exception& e) {
+        std::cout << "Exception: " << e.what() << std::endl;
+        return false;
+    }
+}
+
 int main() {
     std::cout << "Starting rnllama API tests..." << std::endl;
     std::cout << "Using test model: ../tiny-random-llama.gguf" << std::endl;
@@ -619,11 +726,14 @@ int main() {
     results.run_test("Completion Generation Timing", test_completion_generation_timing());
     results.run_test("Completion Probabilities Reset Between Completions", test_completion_probabilities_reset_between_completions());
     results.run_test("Logit Bias Forces Token", test_logit_bias_forces_token());
+    results.run_test("n_min_predict Holds Back EOS", test_n_min_predict_holds_back_eos());
     results.run_test("n_probs Post-Sampling vs Raw", test_n_probs_post_sampling_vs_raw());
     results.run_test("Graceful Context Init Failure", test_context_init_failure_is_graceful());
     results.run_test("Utility Functions", test_utilities());
     results.run_test("draft-simple Completion", test_draft_simple_completion());
     results.run_test("draft-simple Rejects Hybrid", test_draft_simple_rejects_hybrid());
+    results.run_test("Draft Init Failure Keeps Cache Consistent", test_draft_init_failure_keeps_cache_consistent());
+    results.run_test("Bench After Completion", test_bench_after_completion());
 
     // Print summary
     results.print_summary();

@@ -171,6 +171,12 @@ enum common_params_sampling_config : uint64_t {
     COMMON_PARAMS_SAMPLING_CONFIG_MIROSTAT        = 1 << 9,
     COMMON_PARAMS_SAMPLING_CONFIG_MIROSTAT_TAU    = 1 << 10,
     COMMON_PARAMS_SAMPLING_CONFIG_MIROSTAT_ETA    = 1 << 11,
+    COMMON_PARAMS_SAMPLING_CONFIG_PENALTY_FREQ    = 1 << 12,
+    COMMON_PARAMS_SAMPLING_CONFIG_PENALTY_PRESENT = 1 << 13,
+    COMMON_PARAMS_SAMPLING_CONFIG_DRY_MULTIPLIER  = 1 << 14,
+    COMMON_PARAMS_SAMPLING_CONFIG_DRY_BASE        = 1 << 15,
+    COMMON_PARAMS_SAMPLING_CONFIG_DRY_ALLOWED_LENGTH = 1 << 16,
+    COMMON_PARAMS_SAMPLING_CONFIG_DRY_PENALTY_LAST_N = 1 << 17,
 };
 
 enum common_speculative_type {
@@ -311,6 +317,18 @@ struct common_params_model {
     std::string hf_repo     = ""; // HF repo
     std::string hf_file     = ""; // HF file
     std::string docker_repo = ""; // Docker repo
+
+    std::vector<std::string> shards;
+
+    std::vector<std::string> get_paths() const {
+        std::vector<std::string> paths = { path };
+        for (const auto & shard : shards) {
+            if (std::find(paths.begin(), paths.end(), shard) == paths.end()) {
+                paths.push_back(shard);
+            }
+        }
+        return paths;
+    }
 
     std::string get_name() const {
         if (!hf_repo.empty()) {
@@ -602,7 +620,8 @@ struct common_params {
     ggml_type cache_type_k = GGML_TYPE_F16; // KV cache data type for the K
     ggml_type cache_type_v = GGML_TYPE_F16; // KV cache data type for the V
 
-    size_t moe_cache_size = 0; // GPU cache size in bytes for the MoE experts kept in the CPU, split among the GPUs like the layers
+    size_t moe_cache_size      = 0;    // GPU cache size in bytes for the MoE experts kept in the CPU, split among the GPUs like the layers
+    float  moe_cache_cpu_share = 0.0f; // share of the MoE cache misses computed on the CPU instead of uploaded
 
     common_conversation_mode conversation_mode = COMMON_CONVERSATION_MODE_AUTO;
 
@@ -911,8 +930,7 @@ bool glob_match(const std::string & pattern, const std::string & str);
 //
 
 #ifdef _WIN32
-std::wstring utf8_to_wstring(const std::string & str);
-std::string  wstring_to_utf8(const std::wstring & str);
+std::string wstring_to_utf8(const std::wstring & str);
 #endif
 
 //
@@ -923,9 +941,6 @@ std::string  wstring_to_utf8(const std::wstring & str);
 // and setting an empty value unsets the variable
 std::string common_get_env(const std::string & name);
 void        common_set_env(const std::string & name, const std::string & value);
-
-// reads a path from the environment, an unset variable gives an empty path
-std::filesystem::path common_get_path_from_env(const std::string & name);
 
 //
 // Filesystem utils
@@ -1027,6 +1042,8 @@ struct llama_context_params common_context_params_to_llama(const common_params &
 // apply --fit to mparams and cparams, no-op if params.fit_params is false
 void common_fit_apply(common_params & params, struct llama_model_params & mparams, struct llama_context_params & cparams);
 
+struct llama_model * common_model_load(const std::vector<std::string> & paths, const struct llama_model_params & mparams);
+
 // clear LoRA adapters from context, then apply new list of adapters
 void common_set_adapter_lora(struct llama_context * ctx, std::vector<common_adapter_lora_info> & lora);
 
@@ -1102,6 +1119,7 @@ struct common_batch {
         std::vector<llama_seq_id> seq_ids_extra; // see add_seq()
         int32_t      decision_order = 0; // see llama_batch_ext_set_decision_order()
         int32_t      embd_row = -1; // see add_embd_row(), -1 if none
+        int32_t      state_row = -1; // see set_embd_state_row(), -1 if none
     };
 
     std::vector<token> tokens; // mirror of the entries, tokens[i] describes batch index i
@@ -1139,6 +1157,9 @@ struct common_batch {
 
     // attach a state embedding (e.g. the target hidden state for MTP) to the entry at idx, can only be set once per entry
     bool set_embd_state(int32_t idx, llama_embd state);
+
+    // the state of entry idx is row `row` of the h_nextn device buffer of the state source context, see llama_set_embd_state_src()
+    bool set_embd_state_row(int32_t idx, int32_t row);
 
     // add an embedding-only entry (no token id)
     // pos points to n_pos positions
@@ -1298,6 +1319,20 @@ enum ggml_opt_optimizer_type common_opt_get_optimizer(const char *);
 // prompt utils
 //
 
+// leave default-inserted elements uninitialized; callers must fill them before use
+template <typename T>
+struct common_no_init_allocator : std::allocator<T> {
+    template <typename U> struct rebind { using other = common_no_init_allocator<U>; };
+
+    common_no_init_allocator() = default;
+    template <typename U> common_no_init_allocator(const common_no_init_allocator<U> &) {}
+
+    template <typename U> void construct(U * p) { ::new ((void *) p) U; }
+};
+
+// sequence state data, filled by llama_state_seq_get_data_ext()
+using common_state_data = std::vector<uint8_t, common_no_init_allocator<uint8_t>>;
+
 struct common_prompt_checkpoint {
     int64_t n_tokens;
 
@@ -1307,8 +1342,8 @@ struct common_prompt_checkpoint {
     llama_pos pos_min;
     llama_pos pos_max;
 
-    std::vector<uint8_t> data_tgt;
-    std::vector<uint8_t> data_dft;
+    common_state_data data_tgt;
+    common_state_data data_dft;
 
     // (optional) speculative-decoding implementation state stashed with the checkpoint
     // (e.g. eagle3's deferred-boundary g_embd row)
