@@ -1,14 +1,13 @@
 llama.rn: keep common_peg_arena save/load (removed upstream in #30210). The JSI bridge returns the chat parser from getFormattedChat to JS and receives it back with the completion params, so it must round-trip as a string.
 --- a/common/peg-parser.cpp
 +++ b/common/peg-parser.cpp
-@@ -1813,7 +1813,310 @@
-         builder.add_rule("root", to_gbnf(root_));
+@@ -2255,6 +2255,363 @@
      }
  }
-+
+ 
 +static common_json serialize_parser_variant(const common_peg_parser_variant & variant) {
 +    using json = common_json;
- 
++
 +    return std::visit([](const auto & p) -> json {
 +        using T = std::decay_t<decltype(p)>;
 +
@@ -20,6 +19,10 @@ llama.rn: keep common_peg_arena save/load (removed upstream in #30210). The JSI 
 +            return json{{"type", "end"}};
 +        } else if constexpr (std::is_same_v<T, common_peg_literal_parser>) {
 +            return json{{"type", "literal"}, {"literal", p.literal}};
++        } else if constexpr (std::is_same_v<T, common_peg_token_parser>) {
++            return json{{"type", "token"}, {"token", p.token}, {"piece", p.piece}};
++        } else if constexpr (std::is_same_v<T, common_peg_token_not_parser>) {
++            return json{{"type", "token_not"}, {"tokens", p.tokens}};
 +        } else if constexpr (std::is_same_v<T, common_peg_sequence_parser>) {
 +            return json{{"type", "sequence"}, {"children", p.children}};
 +        } else if constexpr (std::is_same_v<T, common_peg_choice_parser>) {
@@ -55,7 +58,17 @@ llama.rn: keep common_peg_arena save/load (removed upstream in #30210). The JSI 
 +        } else if constexpr (std::is_same_v<T, common_peg_string_parser>) {
 +            return json{{"type", "string"}, {"delimiter", std::string(1, p.delimiter)}};
 +        } else if constexpr (std::is_same_v<T, common_peg_until_parser>) {
-+            return json{{"type", "until"}, {"delimiters", p.delimiters}};
++            json branches = json::array();
++            for (const auto & branch : p.branches) {
++                branches.push_back({{"delimiter", branch.delimiter}, {"rest", branch.rest}});
++            }
++            return json{
++                {"type", "until"},
++                {"branches", branches},
++                {"include", p.include},
++                {"optional", p.optional},
++                {"content", p.content}
++            };
 +        } else if constexpr (std::is_same_v<T, common_peg_schema_parser>) {
 +            return json{
 +                {"type", "schema"},
@@ -68,7 +81,9 @@ llama.rn: keep common_peg_arena save/load (removed upstream in #30210). The JSI 
 +                {"type", "rule"},
 +                {"name", p.name},
 +                {"child", p.child},
-+                {"trigger", p.trigger}
++                {"trigger", p.trigger},
++                {"start", p.start},
++                {"rest", p.rest}
 +            };
 +        } else if constexpr (std::is_same_v<T, common_peg_ref_parser>) {
 +            return json{{"type", "ref"}, {"name", p.name}};
@@ -82,8 +97,8 @@ llama.rn: keep common_peg_arena save/load (removed upstream in #30210). The JSI 
 +            };
 +        } else if constexpr (std::is_same_v<T, common_peg_gbnf_parser>) {
 +            return json{{"type", "gbnf"}, {"child", p.child}, {"grammar", p.grammar}};
-+        } else if constexpr (std::is_same_v<T, common_peg_ac_parser>) {
-+            return json{{"type", "ac"}, {"child", p.child}, {"delimiters", p.delimiters}};
++        } else {
++            static_assert(sizeof(T) == 0, "serialize_parser_variant: a parser type has no JSON form");
 +        }
 +    }, variant);
 +}
@@ -121,6 +136,18 @@ llama.rn: keep common_peg_arena save/load (removed upstream in #30210). The JSI 
 +            throw std::runtime_error("literal parser missing or invalid 'literal' field");
 +        }
 +        return common_peg_literal_parser{j["literal"]};
++    }
++    if (type == "token") {
++        if (!j.contains("token") || !j.contains("piece")) {
++            throw std::runtime_error("token parser missing required fields");
++        }
++        return common_peg_token_parser{j["token"].get<llama_token>(), j["piece"].get<std::string>()};
++    }
++    if (type == "token_not") {
++        if (!j.contains("tokens") || !j["tokens"].is_array()) {
++            throw std::runtime_error("token_not parser missing or invalid 'tokens' field");
++        }
++        return common_peg_token_not_parser{j["tokens"].get<std::vector<llama_token>>()};
 +    }
 +    if (type == "sequence") {
 +        if (!j.contains("children") || !j["children"].is_array()) {
@@ -194,10 +221,24 @@ llama.rn: keep common_peg_arena save/load (removed upstream in #30210). The JSI 
 +        return common_peg_string_parser{delimiter[0]};
 +    }
 +    if (type == "until") {
-+        if (!j.contains("delimiters") || !j["delimiters"].is_array()) {
-+            throw std::runtime_error("until parser missing or invalid 'delimiters' field");
++        if (!j.contains("branches") || !j["branches"].is_array() || j["branches"].empty()) {
++            throw std::runtime_error("until parser missing or invalid 'branches' field");
 +        }
-+        return common_peg_until_parser{j["delimiters"].get<std::vector<std::string>>()};
++        // the matcher is rebuilt by from_json once every parser it refers to is loaded
++        common_peg_until_parser parser;
++        for (const auto & branch_json : j["branches"]) {
++            if (!branch_json.contains("delimiter") || !branch_json.contains("rest")) {
++                throw std::runtime_error("until branch missing 'delimiter' or 'rest' field");
++            }
++            parser.branches.push_back({
++                branch_json["delimiter"].get<common_peg_parser_id>(),
++                branch_json["rest"].get<common_peg_parser_id>()
++            });
++        }
++        parser.include  = j.value("include", false);
++        parser.optional = j.value("optional", false);
++        parser.content  = j.value("content", COMMON_PEG_INVALID_PARSER_ID);
++        return parser;
 +    }
 +    if (type == "schema") {
 +        if (!j.contains("child") || !j.contains("name") || !j.contains("raw")) {
@@ -213,11 +254,14 @@ llama.rn: keep common_peg_arena save/load (removed upstream in #30210). The JSI 
 +        if (!j.contains("name") || !j.contains("child") || !j.contains("trigger")) {
 +            throw std::runtime_error("rule parser missing required fields");
 +        }
-+        return common_peg_rule_parser{
++        common_peg_rule_parser parser{
 +            j["name"].get<std::string>(),
 +            j["child"].get<common_peg_parser_id>(),
 +            j["trigger"].get<bool>()
 +        };
++        parser.start = j.value("start", COMMON_PEG_INVALID_PARSER_ID);
++        parser.rest  = j.value("rest", COMMON_PEG_INVALID_PARSER_ID);
++        return parser;
 +    }
 +    if (type == "ref") {
 +        if (!j.contains("name") || !j["name"].is_string()) {
@@ -253,16 +297,6 @@ llama.rn: keep common_peg_arena save/load (removed upstream in #30210). The JSI 
 +        };
 +    }
 +
-+    if (type == "ac") {
-+        if (!j.contains("child") || !j.contains("delimiters") || !j["delimiters"].is_array() || j["delimiters"].empty()) {
-+            throw std::runtime_error("ac parser requires 'child' and a non-empty 'delimiters' array");
-+        }
-+        return common_peg_ac_parser{
-+            j["child"].get<common_peg_parser_id>(),
-+            j["delimiters"].get<std::vector<std::string>>(),
-+        };
-+    }
-+
 +    throw std::runtime_error("Unknown parser type: " + type);
 +}
 +
@@ -283,6 +317,25 @@ llama.rn: keep common_peg_arena save/load (removed upstream in #30210). The JSI 
 +    arena.parsers_.reserve(parsers_json.size());
 +    for (const auto & parser_json : parsers_json) {
 +        arena.parsers_.push_back(deserialize_parser_variant(parser_json));
++    }
++
++    auto check_id = [&](common_peg_parser_id id, bool allow_invalid) {
++        if (id == COMMON_PEG_INVALID_PARSER_ID && allow_invalid) {
++            return;
++        }
++        if (id >= arena.parsers_.size()) {
++            throw std::runtime_error("Parser references invalid parser ID: " + std::to_string(id));
++        }
++    };
++    for (auto & parser : arena.parsers_) {
++        if (auto * until = std::get_if<common_peg_until_parser>(&parser)) {
++            for (const auto & branch : until->branches) {
++                check_id(branch.delimiter, false);
++                check_id(branch.rest, true);
++            }
++            check_id(until->content, true);
++            until->matcher = build_until_matcher(arena, until->branches, until->include);
++        }
 +    }
 +
 +    arena.rules_ = j["rules"].get<std::unordered_map<std::string, common_peg_parser_id>>();
