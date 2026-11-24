@@ -38,6 +38,7 @@ trap cleanup EXIT
 
 copy_headers() {
   local framework_path="$1"
+  local -A copied_common=()
   local headers="$framework_path/Headers"
   local llama_cpp="$ROOT_DIR/vendor/llama.cpp"
 
@@ -55,11 +56,36 @@ copy_headers() {
   mkdir -p "$headers/nlohmann"
   cp "$llama_cpp"/vendor/nlohmann/*.hpp "$headers/nlohmann/"
 
-  # common/ headers the glue needs, at the root (included without a path prefix)
-  local h
-  for h in chat.h common.h sampling.h speculative.h json.h json-schema-to-grammar.h json-schema.h peg-parser.h; do
+  # common/ headers the glue needs, at the root (included without a path prefix),
+  # plus every common/ header they include in turn: upstream adds new ones
+  # (b12675: trie.h from peg-parser.h), and a missing one only fails in the app.
+  local h inc
+  local -a pending=(chat.h common.h sampling.h speculative.h json.h json-schema-to-grammar.h json-schema.h peg-parser.h)
+  while ((${#pending[@]})); do
+    h="${pending[0]}"
+    pending=("${pending[@]:1}")
+    [[ -n "${copied_common[$h]:-}" ]] && continue
     cp "$llama_cpp/common/$h" "$headers/"
+    copied_common[$h]=1
+    while read -r inc; do
+      if [[ -f "$llama_cpp/common/$inc" && "$inc" != */* && -z "${copied_common[$inc]:-}" ]]; then
+        pending+=("$inc")
+      fi
+    done < <(sed -n 's/^[[:space:]]*#[[:space:]]*include[[:space:]]*"\([^"]*\)".*/\1/p' "$llama_cpp/common/$h")
   done
+
+  # Every quoted include in a shipped header must resolve inside Headers/.
+  local f missing=""
+  for f in "$headers"/*.h "$headers"/jinja/*.h; do
+    while read -r inc; do
+      [[ -f "$(dirname "$f")/$inc" || -f "$headers/$inc" ]] || missing+="$(basename "$f") -> $inc"$'\n'
+    done < <(sed -n 's/^[[:space:]]*#[[:space:]]*include[[:space:]]*"\([^"]*\)".*/\1/p' "$f")
+  done
+  if [[ -n "$missing" ]]; then
+    echo "Framework headers include files that are not shipped:" >&2
+    printf '%s' "$missing" >&2
+    exit 1
+  fi
 }
 
 copy_framework_support_files() {
