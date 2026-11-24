@@ -235,6 +235,10 @@ jobs:
     # pools are short; ~4x faster than the Intel pool. Removed after the b12675.1 publish.
     runs-on: [self-hosted, macOS, ARM64, offgrid-m5]
     env:
+      # The self-hosted runner's service has no locale; CocoaPods then crashes in
+      # bootstrap ("Unicode Normalization not appropriate for ASCII-8BIT").
+      LANG: en_US.UTF-8
+      LC_ALL: en_US.UTF-8
       CCACHE_DIR: ${{ github.workspace }}/.ccache
       CCACHE_MAXSIZE: 2G
       # The toolchain is reinstalled per run, so hash the compiler rather than stat it.
