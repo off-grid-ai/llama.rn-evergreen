@@ -323,6 +323,7 @@ generate_llama_cpp_version_files() {
   build_number="$(git -C "$repo" rev-list --count "$commit")"
   build_commit="$(git -C "$repo" rev-parse --short=7 "$commit")"
 
+  # Sets <PREFIX>_MAJOR/_MINOR/_PATCH from set(<PREFIX>_VERSION_*) in an upstream CMakeLists.txt.
   cmake_version() {  # <CMakeLists.txt path in upstream> <PREFIX>
     local file="$1" prefix="$2" major minor patch
     local content
@@ -334,17 +335,27 @@ generate_llama_cpp_version_files() {
       echo "Failed to read ${prefix}_VERSION_* from upstream $file" >&2
       exit 1
     fi
-    echo "$major.$minor.$patch-dev"
+    printf -v "${prefix}_MAJOR" '%s' "$major"
+    printf -v "${prefix}_MINOR" '%s' "$minor"
+    printf -v "${prefix}_PATCH" '%s' "$patch"
   }
-  local llama_version ggml_version
-  llama_version="$(cmake_version CMakeLists.txt LLAMA)"
-  ggml_version="$(cmake_version ggml/CMakeLists.txt GGML)"
+  local LLAMA_MAJOR LLAMA_MINOR LLAMA_PATCH GGML_MAJOR GGML_MINOR GGML_PATCH
+  cmake_version CMakeLists.txt LLAMA
+  cmake_version ggml/CMakeLists.txt GGML
+  local llama_version="$LLAMA_MAJOR.$LLAMA_MINOR.$LLAMA_PATCH-dev"
+  local ggml_version="$GGML_MAJOR.$GGML_MINOR.$GGML_PATCH-dev"
 
   log "Generating version files (build $build_number, commit $build_commit)"
   sed -e "s|@LLAMA_VERSION@|$llama_version|g" \
+      -e "s|@LLAMA_VERSION_MAJOR@|$LLAMA_MAJOR|g" \
+      -e "s|@LLAMA_VERSION_MINOR@|$LLAMA_MINOR|g" \
+      -e "s|@LLAMA_VERSION_PATCH@|$LLAMA_PATCH|g" \
       -e "s|@LLAMA_BUILD_COMMIT@|$build_commit|g" \
       "$dest/src/llama-version.h.in" > "$dest/src/llama-version.h"
   sed -e "s|@GGML_VERSION@|$ggml_version|g" \
+      -e "s|@GGML_VERSION_MAJOR@|$GGML_MAJOR|g" \
+      -e "s|@GGML_VERSION_MINOR@|$GGML_MINOR|g" \
+      -e "s|@GGML_VERSION_PATCH@|$GGML_PATCH|g" \
       -e "s|@GGML_BUILD_COMMIT@|$build_commit|g" \
       "$dest/ggml/src/ggml-version.h.in" > "$dest/ggml/src/ggml-version.h"
   sed -e "s|@LLAMA_BUILD_NUMBER@|$build_number|g" \
@@ -352,6 +363,16 @@ generate_llama_cpp_version_files() {
       -e "s|@BUILD_COMPILER@|unknown|g" \
       -e "s|@BUILD_TARGET@|unknown|g" \
       "$dest/common/build-info.cpp.in" > "$dest/common/build-info.cpp"
+
+  # A placeholder upstream adds to a template must not reach the compiler empty.
+  local generated leftover
+  for generated in src/llama-version.h ggml/src/ggml-version.h common/build-info.cpp; do
+    leftover="$(grep -o '@[A-Z_][A-Z0-9_]*@' "$dest/$generated" | sort -u | tr '\n' ' ' || true)"
+    if [ -n "$leftover" ]; then
+      echo "Unfilled placeholders in $generated: $leftover(add them to generate_llama_cpp_version_files)" >&2
+      exit 1
+    fi
+  done
 
   cat > "$ROOT_DIR/src/version.ts" <<TS
 export const BUILD_NUMBER = '$build_number'
