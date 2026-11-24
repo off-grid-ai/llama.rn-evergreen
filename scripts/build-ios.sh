@@ -38,7 +38,8 @@ trap cleanup EXIT
 
 copy_headers() {
   local framework_path="$1"
-  local -A copied_common=()
+  # Space-separated set: /bin/bash on macOS is 3.2, which has no associative arrays.
+  local copied_common=" "
   local headers="$framework_path/Headers"
   local llama_cpp="$ROOT_DIR/vendor/llama.cpp"
 
@@ -64,11 +65,11 @@ copy_headers() {
   while ((${#pending[@]})); do
     h="${pending[0]}"
     pending=("${pending[@]:1}")
-    [[ -n "${copied_common[$h]:-}" ]] && continue
+    [[ "$copied_common" == *" $h "* ]] && continue
     cp "$llama_cpp/common/$h" "$headers/"
-    copied_common[$h]=1
+    copied_common+="$h "
     while read -r inc; do
-      if [[ -f "$llama_cpp/common/$inc" && "$inc" != */* && -z "${copied_common[$inc]:-}" ]]; then
+      if [[ -f "$llama_cpp/common/$inc" && "$inc" != */* && "$copied_common" != *" $inc "* ]]; then
         pending+=("$inc")
       fi
     done < <(sed -n 's/^[[:space:]]*#[[:space:]]*include[[:space:]]*"\([^"]*\)".*/\1/p' "$llama_cpp/common/$h")
