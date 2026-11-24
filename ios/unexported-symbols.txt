@@ -47,6 +47,14 @@ __ZN[0-9]gguf_*
 __ZN[0-9][0-9]gguf_*
 __ZNK[0-9]gguf_*
 __ZNK[0-9][0-9]gguf_*
+__ZZ[0-9]gguf_*
+__ZZ[0-9][0-9]gguf_*
+__ZTV[0-9]gguf_*
+__ZTV[0-9][0-9]gguf_*
+__ZTI[0-9]gguf_*
+__ZTI[0-9][0-9]gguf_*
+__ZTS[0-9]gguf_*
+__ZTS[0-9][0-9]gguf_*
 
 # ggml-backend-dl.cpp helpers
 __Z[0-9]dl_*
