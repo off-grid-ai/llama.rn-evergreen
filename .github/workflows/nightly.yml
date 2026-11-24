@@ -228,7 +228,10 @@ jobs:
   build-ios:
     needs: sync
     if: needs.sync.outputs.has_changes == 'true'
-    runs-on: macos-26
+    # Intel pool: on 2026-11-24 the hosted arm64 macOS pool refused this job four times
+    # ("not acquired by Runner ... capacity constraints"). The script cross-compiles every
+    # slice (arm64 / x86_64) explicitly, so the host CPU does not change the xcframework.
+    runs-on: macos-15-intel
     env:
       CCACHE_DIR: ${{ github.workspace }}/.ccache
       CCACHE_MAXSIZE: 2G
