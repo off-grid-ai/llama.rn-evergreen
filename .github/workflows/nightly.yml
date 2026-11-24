@@ -231,7 +231,9 @@ jobs:
     # Intel pool: on 2026-11-24 the hosted arm64 macOS pool refused this job four times
     # ("not acquired by Runner ... capacity constraints"). The script cross-compiles every
     # slice (arm64 / x86_64) explicitly, so the host CPU does not change the xcframework.
-    runs-on: macos-15-intel
+    # Mac's own M5 as a self-hosted runner (label offgrid-m5) while the hosted macOS
+    # pools are short; ~4x faster than the Intel pool. Removed after the b12675.1 publish.
+    runs-on: [self-hosted, macOS, ARM64, offgrid-m5]
     env:
       CCACHE_DIR: ${{ github.workspace }}/.ccache
       CCACHE_MAXSIZE: 2G
