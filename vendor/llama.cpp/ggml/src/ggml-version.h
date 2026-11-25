@@ -1,7 +1,7 @@
 #pragma once
 
 #define GGML_VERSION "1.0.0-dev"
-#define GGML_COMMIT  "c212d25"
+#define GGML_COMMIT  "e6443bd"
 
 #define GGML_VERSION_MAJOR (1)
 #define GGML_VERSION_MINOR (0)
